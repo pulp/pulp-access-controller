@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pulp-access-operator
+  namespace: operators
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pulp-access-operator
+  template:
+    metadata:
+      labels:
+        app: pulp-access-operator
+    spec:
+      serviceAccountName: pulp-access-operator
+      containers:
+        - name: operator
+          image: quay.io/ytrahnov/test-controller
+          imagePullPolicy: Always
