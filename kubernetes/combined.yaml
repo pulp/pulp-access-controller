@@ -85,6 +85,28 @@ roleRef:
   name: pulpaccess-user-role
   apiGroup: rbac.authorization.k8s.io
 ---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: pulp-secrets
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  dataFrom:
+    - extract:
+        conversionStrategy: Default
+        decodingStrategy: None
+        key: stonesoup/staging/pulp/pulp-access-controller
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: appsre-stonesoup-vault
+  target:
+    creationPolicy: Owner
+    deletionPolicy: Delete
+    name: pulp-secrets
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -105,3 +127,6 @@ spec:
         - name: operator
           image: quay.io/ytrahnov/test-controller
           imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: pulp-secrets
