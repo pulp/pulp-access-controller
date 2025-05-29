@@ -89,8 +89,9 @@ apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
   name: pulp-secrets
+  namespace: pulp-access-controller
   annotations:
-    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-options: "SkipDryRunOnMissingResource=true"
     argocd.argoproj.io/sync-wave: "-1"
 spec:
   dataFrom:
@@ -127,6 +128,7 @@ spec:
         - name: operator
           image: quay.io/ytrahnov/test-controller
           imagePullPolicy: Always
+          env: []
           envFrom:
             - secretRef:
                 name: pulp-secrets
