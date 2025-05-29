@@ -124,11 +124,35 @@ spec:
         app: pulp-access-operator
     spec:
       serviceAccountName: pulp-access-operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
       containers:
         - name: operator
-          image: quay.io/ytrahnov/test-controller
+          image: quay.io/ytrahnov/test-controller:v1.0.0
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1001
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
           env: []
           envFrom:
             - secretRef:
                 name: pulp-secrets
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
