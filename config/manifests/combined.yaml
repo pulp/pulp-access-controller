@@ -129,6 +129,8 @@ spec:
         app: pulp-access-operator
     spec:
       serviceAccountName: pulp-access-operator
+      securityContext:
+         runAsNonRoot: true
       containers:
         - name: operator
           image: quay.io/ytrahnov/test-controller:v1.0.0
