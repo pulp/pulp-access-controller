@@ -1,13 +1,23 @@
 FROM python:3.10-slim
 
+# Create non-root user with fixed UID
+RUN useradd -u 1001 -r -m -d /app -s /sbin/nologin appuser
+
+# Set working directory
 WORKDIR /app
 
-# Install Python dependencies
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy your controller code
+# Copy application code
 COPY main.py .
+
+# Ensure permissions
+RUN chown -R 1001:1001 /app
+
+# Switch to non-root by UID
+USER 1001
 
 # Run the Kopf operator
 CMD ["kopf", "run", "--standalone", "main.py"]

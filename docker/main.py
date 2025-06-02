@@ -2,14 +2,15 @@ import kopf
 import kubernetes.client
 from kubernetes.client.rest import ApiException
 import base64
+import os
 
-@kopf.on.create('konflux.io', 'v1alpha1', 'pulpaccessrequests')
+@kopf.on.create('pulp.konflux-ci.dev', 'v1alpha1', 'pulpaccessrequests')
 def create_secret(body, spec, namespace, logger, **kwargs):
-    cert = 'cert'
-    key = 'key'
+    cert = os.getenv('pulp_cert')
+    key = os.getenv('pulp_key')
 
     if not cert or not key:
-        raise kopf.PermanentError("Both 'cert' and 'key' must be provided in the spec.")
+        raise kopf.PermanentError("Both 'pulp_cert' and 'pulp_key' environment variables must be provided.")
 
     secret_name = "pulp-access"
 

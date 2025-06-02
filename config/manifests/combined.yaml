@@ -27,12 +27,7 @@ spec:
           properties:
             spec:
               type: object
-              required: ["cert", "key"]
-              properties:
-                cert:
-                  type: string
-                key:
-                  type: string
+              properties: {}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -120,7 +115,7 @@ spec:
          runAsNonRoot: true
       containers:
         - name: operator
-          image: quay.io/ytrahnov/test-controller:v1.0.0
+          image: quay.io/ytrahnov/test-controller:v1.0.1
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
