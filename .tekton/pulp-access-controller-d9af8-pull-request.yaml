@@ -532,8 +532,7 @@ spec:
       - name: IMAGE
         value: $(tasks.build-image-index.results.IMAGE_URL)
       - name: ADDITIONAL_TAGS
-        value: |
-          latest
+        value: ["latest"]
       runAfter:
       - build-image-index
       taskRef:
