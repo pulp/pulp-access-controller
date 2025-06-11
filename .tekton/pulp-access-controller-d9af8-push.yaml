@@ -544,20 +544,20 @@ spec:
         value: "noreply@redhat.com"
       - name: COMMIT_MESSAGE
         value: "Update image to $(tasks.build-image-index.results.IMAGE_URL)"
-  runAfter:
-  - build-image-index
-  taskRef:
-    params:
-    - name: name
-      value: git-update-deployment
-    - name: bundle
-      value: quay.io/konflux-ci/tekton-catalog/task-git-update-deployment:0.1
-    - name: kind
-      value: task
-    resolver: bundles
-  workspaces:
-  - name: repository
-    workspace: git-auth
+      runAfter:
+      - build-image-index
+      taskRef:
+        params:
+        - name: name
+          value: git-update-deployment
+        - name: bundle
+          value: quay.io/konflux-ci/tekton-catalog/task-git-update-deployment:0.1
+        - name: kind
+          value: task
+        resolver: bundles
+      workspaces:
+      - name: repository
+        workspace: git-auth
     - name: apply-tags
       params:
       - name: IMAGE
