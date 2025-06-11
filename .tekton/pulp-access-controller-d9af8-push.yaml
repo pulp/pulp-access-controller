@@ -524,6 +524,40 @@ spec:
         operator: in
         values:
         - "false"
+    - name: update-deployment
+      params:
+      - name: IMAGE_URL
+        value: $(tasks.build-image-index.results.IMAGE_URL)
+      - name: IMAGE_DIGEST  
+        value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+      - name: GIT_REPOSITORY
+        value: $(params.git-url)
+      - name: GIT_REVISION
+        value: $(params.revision)
+      - name: DEPLOYMENT_FILE
+        value: config/manifests/production/combined.yaml
+      - name: IMAGE_REPO
+        value: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pulp-access-controller-d9af8
+      - name: GIT_USER_NAME
+        value: "Konflux Pipeline"
+      - name: GIT_USER_EMAIL
+        value: "noreply@redhat.com"
+      - name: COMMIT_MESSAGE
+        value: "Update image to $(tasks.build-image-index.results.IMAGE_URL)"
+  runAfter:
+  - build-image-index
+  taskRef:
+    params:
+    - name: name
+      value: git-update-deployment
+    - name: bundle
+      value: quay.io/konflux-ci/tekton-catalog/task-git-update-deployment:0.1
+    - name: kind
+      value: task
+    resolver: bundles
+  workspaces:
+  - name: repository
+    workspace: git-auth
     - name: apply-tags
       params:
       - name: IMAGE

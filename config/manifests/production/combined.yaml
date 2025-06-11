@@ -118,7 +118,7 @@ spec:
          runAsNonRoot: true
       containers:
         - name: operator
-          image: quay.io/ytrahnov/test-controller:v1.0.1
+          image: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pulp-access-controller-d9af8:latest
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
