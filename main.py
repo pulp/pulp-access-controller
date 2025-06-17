@@ -8,6 +8,17 @@ import os
 def create_secret(body, spec, namespace, logger, **kwargs):
     cert = os.getenv('pulp_cert')
     key = os.getenv('pulp_key')
+    cli_toml_content = """[cli]
+base_url = "https://mtls.internal.console.redhat.com"
+api_root = "/api/pulp/"
+cert = "./tls.crt"
+key = "./tls.key"
+verify_ssl = true
+format = "json"
+dry_run = false
+timeout = 0
+verbose = 0
+"""
 
     if not cert or not key:
         raise kopf.PermanentError("Both 'pulp_cert' and 'pulp_key' environment variables must be provided.")
@@ -17,6 +28,7 @@ def create_secret(body, spec, namespace, logger, **kwargs):
     # Encode as base64 (Secrets require this)
     encoded_cert = base64.b64encode(cert.encode('utf-8')).decode('utf-8')
     encoded_key = base64.b64encode(key.encode('utf-8')).decode('utf-8')
+    encoded_cli_toml = base64.b64encode(cli_toml_content.encode('utf-8')).decode('utf-8')
 
     secret = kubernetes.client.V1Secret(
         metadata=kubernetes.client.V1ObjectMeta(
@@ -31,10 +43,11 @@ def create_secret(body, spec, namespace, logger, **kwargs):
                 block_owner_deletion=True,
             )]
         ),
-        type="kubernetes.io/tls",
+        type="Opaque",
         data={
             "tls.crt": encoded_cert,
             "tls.key": encoded_key,
+            "cli.toml": encoded_cli_toml,
         }
     )
 
