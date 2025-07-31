@@ -21,10 +21,15 @@ spec:
           properties:
             spec:
               type: object
-              required: ["cert", "key"]
+              required: []
               properties:
-                cert:
+                client_id:
                   type: string
-                key:
+                  description: "OAuth2 client ID for authentication (optional)"
+                client_secret:
                   type: string
+                  description: "OAuth2 client secret for authentication (optional)"
+                domain:
+                  type: string
+                  description: "Domain name to create via Pulp API (optional, requires OAuth2 credentials)"
 
