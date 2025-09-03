@@ -6,7 +6,7 @@ RUN useradd -u 1001 -r -m -d /app -s /sbin/nologin appuser
 # Set working directory
 WORKDIR /app
 
-# Install dependencies
+# Copy requirements and install dependencies as root first
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -14,8 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY pulp_oauth2_auth.py .
 
-# Ensure permissions
-RUN chown -R 1001:1001 /app
+# Ensure all files have correct permissions and ownership
+RUN chown -R 1001:1001 /app && \
+    chmod -R 755 /app && \
+    chmod 644 /app/*.py /app/requirements.txt
 
 # Switch to non-root by UID
 USER 1001
