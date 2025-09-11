@@ -38,6 +38,9 @@ spec:
                 domain:
                   type: string
                   description: "Domain name to create via Pulp API (optional, requires OAuth2 credentials)"
+                use_quay_backend:
+                  type: boolean
+                  description: "Whether to configure Quay as the OCI backend storage for the domain (optional, defaults to false)"
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -61,7 +64,10 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["secrets", "events"]
-    verbs: ["create", "update", "patch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["appstudio.redhat.com"]
+    resources: ["imagerepositories"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -128,7 +134,7 @@ spec:
          runAsNonRoot: true
       containers:
         - name: operator
-          image: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pulp-access-controller-d9af8:v1.0.4
+          image: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pap:v1.0.5
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

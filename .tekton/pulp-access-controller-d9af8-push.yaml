@@ -13,7 +13,7 @@ metadata:
     appstudio.openshift.io/application: pulp-access-controller
     appstudio.openshift.io/component: pulp-access-controller-d9af8
     pipelines.appstudio.openshift.io/type: build
-  name: pulp-access-controller-d9af8-on-push
+  name: pap-on-push
   namespace: ytrahnov-tenant
 spec:
   params:
@@ -22,7 +22,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pulp-access-controller-d9af8:{{revision}}
+    value: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pap:{{revision}}
   - name: dockerfile
     value: /docker/Dockerfile
   pipelineSpec:
@@ -456,7 +456,7 @@ spec:
     - name: apply-tags
       params:
       - name: ADDITIONAL_TAGS
-        value: ["v1.0.4"]
+        value: ["v1.0.5"]
       - name: IMAGE_URL
         value: $(tasks.build-image-index.results.IMAGE_URL)
       - name: IMAGE_DIGEST

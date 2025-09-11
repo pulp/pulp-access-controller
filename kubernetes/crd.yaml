@@ -32,4 +32,7 @@ spec:
                 domain:
                   type: string
                   description: "Domain name to create via Pulp API (optional, requires OAuth2 credentials)"
+                use_quay_backend:
+                  type: boolean
+                  description: "Whether to configure Quay as the OCI backend storage for the domain (optional, defaults to false)"
 
