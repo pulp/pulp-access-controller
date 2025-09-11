@@ -22,7 +22,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pulp-access-controller-d9af8:{{revision}}
+    value: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pap:{{revision}}
   - name: dockerfile
     value: /docker/Dockerfile
   pipelineSpec:
