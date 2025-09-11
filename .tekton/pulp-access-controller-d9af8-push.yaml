@@ -13,7 +13,7 @@ metadata:
     appstudio.openshift.io/application: pulp-access-controller
     appstudio.openshift.io/component: pap
     pipelines.appstudio.openshift.io/type: build
-  name: pulp-access-controller-d9af8-on-push
+  name: pap-on-push
   namespace: ytrahnov-tenant
 spec:
   params:
@@ -524,7 +524,7 @@ spec:
     - name: netrc
       optional: true
   taskRunTemplate:
-    serviceAccountName: build-pipeline-pulp-access-controller-d9af8
+    serviceAccountName: build-pipeline-pap
   workspaces:
   - name: git-auth
     secret:
