@@ -140,7 +140,7 @@ spec:
          runAsNonRoot: true
       containers:
         - name: operator
-          image: quay.io/redhat-user-workloads-stage/ytrahnov-tenant/pap:v1.0.5
+          image: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:v1.0.6
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
