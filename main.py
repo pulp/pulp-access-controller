@@ -9,14 +9,18 @@ import json
 
 @kopf.on.create('pulp.konflux-ci.dev', 'v1alpha1', 'pulpaccessrequests')
 def create_secret(body, spec, namespace, logger, **kwargs):
-    cert = os.getenv('pulp_cert')
-    key = os.getenv('pulp_key')
+    # Comment out existing environment variable reading for cert/key
+    # cert = os.getenv('pulp_cert')
+    # key = os.getenv('pulp_key')
     
-    # Extract optional client_id and client_secret from spec
+    # Extract optional parameters from spec
     client_id = spec.get('client_id', None)
     client_secret = spec.get('client_secret', None)
     domain = spec.get('domain', None)
     use_quay_backend = spec.get('use_quay_backend', False)
+    # Support for custom certificate and key
+    custom_cert = spec.get('cert', None)
+    custom_key = spec.get('key', None)
     
     # mTLS configuration
     cli_toml_content = """[cli]
@@ -48,16 +52,23 @@ verbose = 0
     secret_name = "pulp-access"
 
     # Encode as base64 (Secrets require this)
-    encoded_cert = base64.b64encode(cert.encode('utf-8')).decode('utf-8')
-    encoded_key = base64.b64encode(key.encode('utf-8')).decode('utf-8')
     encoded_cli_toml = base64.b64encode(cli_toml_content.encode('utf-8')).decode('utf-8')
 
     # Prepare secret data with mandatory fields
     secret_data = {
-        "tls.crt": encoded_cert,
-        "tls.key": encoded_key,
         "cli.toml": encoded_cli_toml,
     }
+    
+    # Add custom certificate and key if provided
+    if custom_cert:
+        encoded_cert = base64.b64encode(custom_cert.encode('utf-8')).decode('utf-8')
+        secret_data["tls.crt"] = encoded_cert
+        logger.info("Adding custom certificate to secret")
+    
+    if custom_key:
+        encoded_key = base64.b64encode(custom_key.encode('utf-8')).decode('utf-8')
+        secret_data["tls.key"] = encoded_key
+        logger.info("Adding custom key to secret")
     
     # Add optional client credentials and OAuth TOML if provided
     if client_id:

@@ -35,4 +35,10 @@ spec:
                 use_quay_backend:
                   type: boolean
                   description: "Whether to configure Quay as the OCI backend storage for the domain (optional, defaults to false)"
+                cert:
+                  type: string
+                  description: "Custom TLS certificate in PEM format (optional)"
+                key:
+                  type: string
+                  description: "Custom TLS private key in PEM format (optional)"
 
