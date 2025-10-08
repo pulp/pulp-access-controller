@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Create non-root user with fixed UID
 RUN useradd -u 1001 -r -m -d /app -s /sbin/nologin appuser
