@@ -1,0 +1,25 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-pulp-credentials
+  namespace: default
+type: Opaque
+stringData:
+  client_id: "8cd0a995-c3d8-4851-a834-fe5a43874f1b"
+  client_secret: "mIVUJzjMTMiNkkahOjvoyWJP6evon7XY"
+---
+apiVersion: pulp.konflux-ci.dev/v1alpha1
+kind: PulpAccessRequest
+metadata:
+  name: konflux-demo-day44
+  labels:
+    app: test-app
+    environment: test
+  annotations:
+    description: "Konflux PulpAccessRequest with OAuth2 and domain creation"
+spec:
+  credentialsSecretName: test-pulp-credentials
+  use_quay_backend: true
+# Note: Domain will be auto-generated based on namespace
+# If this is in 'default' namespace, domain will be 'konflux-default'

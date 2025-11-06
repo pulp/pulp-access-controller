@@ -33,25 +33,24 @@ The Pulp Access Controller simplifies access management for Red Hat Pulp by auto
 
 ## Usage
 
-### Basic Usage
+### Step 1: Create a Credentials Secret
 
-Create a `PulpAccessRequest` to generate authentication secrets:
+First, create a Kubernetes secret containing your credentials:
 
 ```yaml
-apiVersion: pulp.konflux-ci.dev/v1alpha1
-kind: PulpAccessRequest
+apiVersion: v1
+kind: Secret
 metadata:
-  name: my-pulp-access
+  name: pulp-credentials
   namespace: my-namespace
-spec:
-  # OAuth2 credentials (optional)
+type: Opaque
+stringData:
+  # OAuth2 credentials (optional, required for domain creation)
   client_id: "my-client-id"
   client_secret: "my-client-secret"
   
-  # Domain management (optional)
-  domain: "my-pulp-domain"
-  
-  # Custom TLS certificate and key (optional)
+  # Custom TLS certificate and key (optional, for mTLS)
+  # Option 1: Use 'cert' and 'key'
   cert: |
     -----BEGIN CERTIFICATE-----
     ... your certificate content ...
@@ -60,11 +59,38 @@ spec:
     -----BEGIN PRIVATE KEY-----
     ... your private key content ...
     -----END PRIVATE KEY-----
+  
+  # Option 2: Use 'tls.crt' and 'tls.key' (alternative naming)
+  # tls.crt: |
+  #   -----BEGIN CERTIFICATE-----
+  #   ...
+  #   -----END CERTIFICATE-----
+  # tls.key: |
+  #   -----BEGIN PRIVATE KEY-----
+  #   ...
+  #   -----END PRIVATE KEY-----
 ```
 
-### Pulp with Quay Backend
+### Step 2: Create a PulpAccessRequest
 
-If you want Pulp to use Quay.io as storage backend:
+Then, create a `PulpAccessRequest` that references your credentials secret:
+
+```yaml
+apiVersion: pulp.konflux-ci.dev/v1alpha1
+kind: PulpAccessRequest
+metadata:
+  name: my-pulp-access
+  namespace: my-namespace
+spec:
+  # Required: Name of the secret containing credentials
+  credentialsSecretName: pulp-credentials
+```
+
+**Note**: The Pulp domain will be automatically created with the name `konflux-<namespace>`. For example, if your namespace is `my-namespace`, the domain will be `konflux-my-namespace`.
+
+### Advanced: Pulp with Quay Backend
+
+To configure Pulp with Quay.io as the OCI storage backend:
 
 ```yaml
 apiVersion: pulp.konflux-ci.dev/v1alpha1
@@ -73,19 +99,11 @@ metadata:
   name: pulp-with-quay-backend
   namespace: my-namespace
 spec:
-  client_id: "my-oauth-client"
-  client_secret: "my-oauth-secret"
-  domain: "production-domain"
+  credentialsSecretName: pulp-credentials
   use_quay_backend: true
-  cert: |
-    -----BEGIN CERTIFICATE-----
-    ... certificate for mTLS ...
-    -----END CERTIFICATE-----
-  key: |
-    -----BEGIN PRIVATE KEY-----
-    ... private key for mTLS ...
-    -----END PRIVATE KEY-----
 ```
+
+The domain `konflux-my-namespace` will be automatically created and configured with Quay backend storage.
 
 ## Generated Secret Structure
 
@@ -94,9 +112,85 @@ The controller creates a secret named `pulp-access` containing:
 | Key | Description | When Included |
 |-----|-------------|---------------|
 | `cli.toml` | mTLS configuration for pulp-cli | Always |
-| `oauth-cli.toml` | OAuth2 configuration for pulp-cli | When client credentials provided |
-| `tls.crt` | TLS certificate | When custom certificate provided |
-| `tls.key` | TLS private key | When custom key provided |
-| `client_id` | OAuth2 client ID | When provided in spec |
-| `client_secret` | OAuth2 client secret | When provided in spec |
-| `domain` | Pulp domain name | When provided in spec |
+| `oauth-cli.toml` | OAuth2 configuration for pulp-cli | When client credentials in referenced secret |
+| `tls.crt` | TLS certificate | When custom certificate in referenced secret |
+| `tls.key` | TLS private key | When custom key in referenced secret |
+| `client_id` | OAuth2 client ID | When provided in referenced secret |
+| `client_secret` | OAuth2 client secret | When provided in referenced secret |
+| `domain` | Pulp domain name (auto-generated as `konflux-<namespace>`) | Always |
+
+## Credentials Secret Format
+
+The credentials secret referenced by `credentialsSecretName` should contain:
+
+| Key | Description | Required |
+|-----|-------------|----------|
+| `client_id` | OAuth2 client ID | Optional (required for domain creation) |
+| `client_secret` | OAuth2 client secret | Optional (required for domain creation) |
+| `cert` or `tls.crt` | TLS certificate in PEM format | Optional (for mTLS) |
+| `key` or `tls.key` | TLS private key in PEM format | Optional (for mTLS) |
+
+**Note**: The controller supports both `cert`/`key` and `tls.crt`/`tls.key` naming conventions for certificates.
+
+## Checking Status
+
+After creating a `PulpAccessRequest`, you can check its status to see if the processing completed successfully:
+
+```bash
+kubectl get pulpaccessrequest my-pulp-access -o yaml
+```
+
+### Status Fields
+
+The controller updates the following status fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `secretName` | string | Name of the generated secret (always `pulp-access`) |
+| `domain` | string | The auto-generated Pulp domain name (`konflux-<namespace>`) |
+| `domainCreated` | boolean | Whether the Pulp domain was successfully created |
+| `imageRepositoryCreated` | boolean | Whether the ImageRepository was created (when `use_quay_backend: true`) |
+| `quayBackendConfigured` | boolean | Whether Quay backend storage was configured (when `use_quay_backend: true`) |
+| `conditions` | array | Array of condition objects with detailed status information |
+
+### Status Conditions
+
+The controller sets the following condition types:
+
+| Condition Type | Status | Reason | Description |
+|----------------|--------|--------|-------------|
+| `Ready` | `True` | `SecretCreated` | The pulp-access secret was successfully created |
+| `Ready` | `True` | `SecretExists` | The pulp-access secret already exists |
+| `Ready` | `False` | `MissingCredentials` | The `credentialsSecretName` field is required but not provided |
+| `Ready` | `False` | `SecretNotFound` | The referenced credentials secret was not found |
+| `Ready` | `False` | `SecretReadError` | Error reading the credentials secret |
+| `Ready` | `False` | `ApiError` | Kubernetes API error occurred |
+| `Ready` | `False` | `UnexpectedError` | An unexpected error occurred |
+
+### Example Status Output
+
+```yaml
+status:
+  conditions:
+  - lastTransitionTime: "2025-11-05T10:30:00Z"
+    message: Successfully created secret 'pulp-access'
+    reason: SecretCreated
+    status: "True"
+    type: Ready
+  domain: konflux-my-namespace
+  domainCreated: true
+  imageRepositoryCreated: true
+  quayBackendConfigured: true
+  secretName: pulp-access
+```
+
+### Quick Status Check
+
+To quickly check if your PulpAccessRequest is ready:
+
+```bash
+kubectl get pulpaccessrequest my-pulp-access -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+```
+
+This will output `True` if the request was processed successfully.
+
