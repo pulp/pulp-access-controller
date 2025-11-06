@@ -21,32 +21,57 @@ spec:
     - name: v1alpha1
       served: true
       storage: true
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           type: object
           properties:
             spec:
               type: object
-              required: []
+              required:
+                - credentialsSecretName
               properties:
-                client_id:
+                credentialsSecretName:
                   type: string
-                  description: "OAuth2 client ID for authentication (optional)"
-                client_secret:
-                  type: string
-                  description: "OAuth2 client secret for authentication (optional)"
-                domain:
-                  type: string
-                  description: "Domain name to create via Pulp API (optional, requires OAuth2 credentials)"
+                  description: "Name of the secret containing OAuth2 credentials (client_id, client_secret) and/or TLS certificates (cert/tls.crt, key/tls.key)"
                 use_quay_backend:
                   type: boolean
                   description: "Whether to configure Quay as the OCI backend storage for the domain (optional, defaults to false)"
-                cert:
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                secretName:
                   type: string
-                  description: "Custom TLS certificate in PEM format (optional)"
-                key:
+                  description: "Name of the generated secret"
+                domain:
                   type: string
-                  description: "Custom TLS private key in PEM format (optional)"
+                  description: "The auto-generated Pulp domain name (konflux-<namespace>)"
+                domainCreated:
+                  type: boolean
+                  description: "Whether the Pulp domain was created"
+                imageRepositoryCreated:
+                  type: boolean
+                  description: "Whether the ImageRepository was created"
+                quayBackendConfigured:
+                  type: boolean
+                  description: "Whether Quay backend storage was configured"
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -62,6 +87,9 @@ rules:
   - apiGroups: ["pulp.konflux-ci.dev"]
     resources: ["pulpaccessrequests"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["pulp.konflux-ci.dev"]
+    resources: ["pulpaccessrequests/status"]
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["pulp.konflux-ci.dev"]
     resources: ["pulpaccessrequests/finalizers"]
     verbs: ["update"]
@@ -140,7 +168,7 @@ spec:
          runAsNonRoot: true
       containers:
         - name: operator
-          image: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:v1.0.6
+          image: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:v1.0.7
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

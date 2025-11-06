@@ -6,24 +6,102 @@ import base64
 import os
 import time
 import json
+from datetime import datetime, timezone
 
 @kopf.on.create('pulp.konflux-ci.dev', 'v1alpha1', 'pulpaccessrequests')
-def create_secret(body, spec, namespace, logger, **kwargs):
-    # Comment out existing environment variable reading for cert/key
-    # cert = os.getenv('pulp_cert')
-    # key = os.getenv('pulp_key')
+def create_secret(body, spec, namespace, logger, patch, **kwargs):
+    api = kubernetes.client.CoreV1Api()
+    custom_api = kubernetes.client.CustomObjectsApi()
     
-    # Extract optional parameters from spec
-    client_id = spec.get('client_id', None)
-    client_secret = spec.get('client_secret', None)
-    domain = spec.get('domain', None)
-    use_quay_backend = spec.get('use_quay_backend', False)
-    # Support for custom certificate and key
-    custom_cert = spec.get('cert', None)
-    custom_key = spec.get('key', None)
+    # Check if already processed by looking at existing status
+    existing_status = body.get('status', {})
+    if existing_status.get('conditions'):
+        for condition in existing_status.get('conditions', []):
+            if condition.get('type') == 'Ready' and condition.get('status') == 'True':
+                logger.info("PulpAccessRequest already processed successfully, skipping")
+                return
     
-    # mTLS configuration
-    cli_toml_content = """[cli]
+    # Initialize status tracking
+    new_status = {
+        'secretName': 'pulp-access',
+        'domain': None,
+        'domainCreated': False,
+        'imageRepositoryCreated': False,
+        'quayBackendConfigured': False,
+        'conditions': []
+    }
+    
+    def add_condition(condition_type, status_value, reason, message):
+        """Helper to add a condition to status"""
+        condition = {
+            'type': condition_type,
+            'status': status_value,
+            'reason': reason,
+            'message': message,
+            'lastTransitionTime': datetime.now(timezone.utc).isoformat()
+        }
+        new_status['conditions'].append(condition)
+        return condition
+    
+    try:
+        # Get the secret name from spec
+        credentials_secret_name = spec.get('credentialsSecretName', None)
+        
+        if not credentials_secret_name:
+            logger.error("credentialsSecretName not provided in spec")
+            add_condition('Ready', 'False', 'MissingCredentials', 'credentialsSecretName is required')
+            raise kopf.PermanentError("credentialsSecretName is required")
+        
+        # Read the credentials secret
+        try:
+            credentials_secret = api.read_namespaced_secret(credentials_secret_name, namespace)
+        except ApiException as e:
+            if e.status == 404:
+                logger.error(f"Credentials secret '{credentials_secret_name}' not found in namespace '{namespace}'")
+                add_condition('Ready', 'False', 'SecretNotFound', f"Credentials secret '{credentials_secret_name}' not found")
+                raise kopf.TemporaryError(f"Secret '{credentials_secret_name}' not found", delay=30)
+            else:
+                logger.error(f"Error reading credentials secret: {e}")
+                add_condition('Ready', 'False', 'SecretReadError', f"Error reading credentials secret: {str(e)}")
+                raise
+        
+        # Decode credentials from the secret
+        secret_data = credentials_secret.data or {}
+        
+        # Extract credentials (decode from base64)
+        client_id = None
+        client_secret = None
+        custom_cert = None
+        custom_key = None
+        
+        if 'client_id' in secret_data:
+            client_id = base64.b64decode(secret_data['client_id']).decode('utf-8')
+            logger.info("Found client_id in credentials secret")
+        
+        if 'client_secret' in secret_data:
+            client_secret = base64.b64decode(secret_data['client_secret']).decode('utf-8')
+            logger.info("Found client_secret in credentials secret")
+        
+        if 'cert' in secret_data or 'tls.crt' in secret_data:
+            cert_key = 'cert' if 'cert' in secret_data else 'tls.crt'
+            custom_cert = base64.b64decode(secret_data[cert_key]).decode('utf-8')
+            logger.info(f"Found certificate in credentials secret (key: {cert_key})")
+        
+        if 'key' in secret_data or 'tls.key' in secret_data:
+            key_key = 'key' if 'key' in secret_data else 'tls.key'
+            custom_key = base64.b64decode(secret_data[key_key]).decode('utf-8')
+            logger.info(f"Found key in credentials secret (key: {key_key})")
+        
+        # Extract other optional parameters from spec
+        use_quay_backend = spec.get('use_quay_backend', False)
+        
+        # Generate domain name from namespace: konflux-<namespace>
+        domain = f"konflux-{namespace}"
+        logger.info(f"Generated domain name: {domain}")
+        new_status['domain'] = domain
+        
+        # mTLS configuration
+        cli_toml_content = """[cli]
 base_url = "https://mtls.internal.console.redhat.com"
 api_root = "/api/pulp/"
 cert = "./tls.crt"
@@ -35,8 +113,8 @@ timeout = 0
 verbose = 0
 """
 
-    # OAuth configuration (created only if client credentials are provided)
-    oauth_cli_toml_content = f"""[cli]
+        # OAuth configuration (created only if client credentials are provided)
+        oauth_cli_toml_content = f"""[cli]
 base_url = "https://console.redhat.com"
 api_root = "/api/pulp/"
 client_id = "{client_id}"
@@ -49,93 +127,92 @@ timeout = 0
 verbose = 0
 """
 
-    secret_name = "pulp-access"
+        secret_name = "pulp-access"
 
-    # Encode as base64 (Secrets require this)
-    encoded_cli_toml = base64.b64encode(cli_toml_content.encode('utf-8')).decode('utf-8')
+        # Encode as base64 (Secrets require this)
+        encoded_cli_toml = base64.b64encode(cli_toml_content.encode('utf-8')).decode('utf-8')
 
-    # Prepare secret data with mandatory fields
-    secret_data = {
-        "cli.toml": encoded_cli_toml,
-    }
-    
-    # Add custom certificate and key if provided
-    if custom_cert:
-        encoded_cert = base64.b64encode(custom_cert.encode('utf-8')).decode('utf-8')
-        secret_data["tls.crt"] = encoded_cert
-        logger.info("Adding custom certificate to secret")
-    
-    if custom_key:
-        encoded_key = base64.b64encode(custom_key.encode('utf-8')).decode('utf-8')
-        secret_data["tls.key"] = encoded_key
-        logger.info("Adding custom key to secret")
-    
-    # Add optional client credentials and OAuth TOML if provided
-    if client_id:
-        encoded_client_id = base64.b64encode(client_id.encode('utf-8')).decode('utf-8')
-        secret_data["client_id"] = encoded_client_id
-        logger.info(f"Adding client_id to secret")
-    
-    if client_secret:
-        encoded_client_secret = base64.b64encode(client_secret.encode('utf-8')).decode('utf-8')
-        secret_data["client_secret"] = encoded_client_secret
-        logger.info(f"Adding client_secret to secret")
-    
-    # Add OAuth TOML configuration if both client credentials are provided
-    if client_id and client_secret:
-        encoded_oauth_cli_toml = base64.b64encode(oauth_cli_toml_content.encode('utf-8')).decode('utf-8')
-        secret_data["oauth-cli.toml"] = encoded_oauth_cli_toml
-        logger.info(f"Adding OAuth CLI configuration to secret")
-    
-    # Add domain if provided
-    if domain:
-        encoded_domain = base64.b64encode(domain.encode('utf-8')).decode('utf-8')
-        secret_data["domain"] = encoded_domain
-        logger.info(f"Adding domain '{domain}' to secret")
+        # Prepare secret data with mandatory fields
+        secret_data = {
+            "cli.toml": encoded_cli_toml,
+        }
         
-        # Create domain via Pulp API if credentials are available
-        if domain and client_id and client_secret:
-            try:
-                logger.info(f"Creating domain '{domain}' via Pulp API")
-                session = PulpOAuth2Session(
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    base_url="https://console.redhat.com"
-                )
-                
-                domain_data = {"name": domain}
-                response = session.post("/api/pulp/create-domain/", json=domain_data)
-                
-                if response.status_code == 201:
-                    logger.info(f"Domain '{domain}' created successfully via API")
-                elif response.status_code == 400 and "already exists" in response.text:
-                    logger.warning(f"Domain '{domain}' already exists")
-                else:
-                    logger.error(f"Failed to create domain '{domain}': {response.status_code} - {response.text}")
+        # Add custom certificate and key if provided
+        if custom_cert:
+            encoded_cert = base64.b64encode(custom_cert.encode('utf-8')).decode('utf-8')
+            secret_data["tls.crt"] = encoded_cert
+            logger.info("Adding custom certificate to secret")
+        
+        if custom_key:
+            encoded_key = base64.b64encode(custom_key.encode('utf-8')).decode('utf-8')
+            secret_data["tls.key"] = encoded_key
+            logger.info("Adding custom key to secret")
+        
+        # Add optional client credentials and OAuth TOML if provided
+        if client_id:
+            encoded_client_id = base64.b64encode(client_id.encode('utf-8')).decode('utf-8')
+            secret_data["client_id"] = encoded_client_id
+            logger.info(f"Adding client_id to secret")
+        
+        if client_secret:
+            encoded_client_secret = base64.b64encode(client_secret.encode('utf-8')).decode('utf-8')
+            secret_data["client_secret"] = encoded_client_secret
+            logger.info(f"Adding client_secret to secret")
+        
+        # Add OAuth TOML configuration if both client credentials are provided
+        if client_id and client_secret:
+            encoded_oauth_cli_toml = base64.b64encode(oauth_cli_toml_content.encode('utf-8')).decode('utf-8')
+            secret_data["oauth-cli.toml"] = encoded_oauth_cli_toml
+            logger.info(f"Adding OAuth CLI configuration to secret")
+        
+        # Add domain if provided
+        if domain:
+            encoded_domain = base64.b64encode(domain.encode('utf-8')).decode('utf-8')
+            secret_data["domain"] = encoded_domain
+            logger.info(f"Adding domain '{domain}' to secret")
+            
+            # Create domain via Pulp API if credentials are available
+            if domain and client_id and client_secret:
+                try:
+                    logger.info(f"Creating domain '{domain}' via Pulp API")
+                    session = PulpOAuth2Session(
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        base_url="https://console.redhat.com"
+                    )
                     
-            except Exception as e:
-                logger.error(f"Error creating domain '{domain}': {str(e)}")
+                    domain_data = {"name": domain}
+                    response = session.post("/api/pulp/create-domain/", json=domain_data)
+                    
+                    if response.status_code == 201:
+                        logger.info(f"Domain '{domain}' created successfully via API")
+                        new_status['domainCreated'] = True
+                    elif response.status_code == 400 and "already exists" in response.text:
+                        logger.warning(f"Domain '{domain}' already exists")
+                        new_status['domainCreated'] = True
+                    else:
+                        logger.error(f"Failed to create domain '{domain}': {response.status_code} - {response.text}")
+                        
+                except Exception as e:
+                    logger.error(f"Error creating domain '{domain}': {str(e)}")
 
-    secret = kubernetes.client.V1Secret(
-        metadata=kubernetes.client.V1ObjectMeta(
-            name=secret_name,
-            namespace=namespace,
-            owner_references=[kubernetes.client.V1OwnerReference(
-                api_version=body['apiVersion'],
-                kind=body['kind'],
-                name=body['metadata']['name'],
-                uid=body['metadata']['uid'],
-                controller=True,
-                block_owner_deletion=True,
-            )]
-        ),
-        type="Opaque",
-        data=secret_data
-    )
+        secret = kubernetes.client.V1Secret(
+            metadata=kubernetes.client.V1ObjectMeta(
+                name=secret_name,
+                namespace=namespace,
+                owner_references=[kubernetes.client.V1OwnerReference(
+                    api_version=body['apiVersion'],
+                    kind=body['kind'],
+                    name=body['metadata']['name'],
+                    uid=body['metadata']['uid'],
+                    controller=True,
+                    block_owner_deletion=True,
+                )]
+            ),
+            type="Opaque",
+            data=secret_data
+        )
 
-    api = kubernetes.client.CoreV1Api()
-    custom_api = kubernetes.client.CustomObjectsApi()
-    try:
         api.create_namespaced_secret(namespace=namespace, body=secret)
         logger.info(f"Secret '{secret_name}' created in namespace '{namespace}'")
         
@@ -173,9 +250,9 @@ verbose = 0
                 body=imagerepo_body
             )
             logger.info(f"ImageRepository 'pulp-access-controller-imagerepo' created in namespace '{namespace}'")
+            new_status['imageRepositoryCreated'] = True
             
             # Wait a moment for the ImageRepository controller to create the secret
-            
             time.sleep(15)
             
             # Try to read the generated secret
@@ -270,6 +347,7 @@ verbose = 0
                                     
                                     if update_response.status_code == 202:
                                         logger.info(f"Successfully configured OCI storage for domain '{domain}'")
+                                        new_status['quayBackendConfigured'] = True
                                     else:
                                         logger.error(f"Failed to update domain '{domain}' storage: {update_response.status_code} - {update_response.text}")
             except ApiException as secret_e:
@@ -284,11 +362,62 @@ verbose = 0
         else:
             logger.info("Skipping ImageRepository creation and OCI storage configuration - use_quay_backend is False")
         
+        # Update status to indicate success
+        add_condition('Ready', 'True', 'SecretCreated', f"Successfully created secret '{secret_name}'")
+        logger.info("PulpAccessRequest processing completed successfully")
+        
+        # Update status using Kubernetes API directly
+        try:
+            custom_api.patch_namespaced_custom_object_status(
+                group="pulp.konflux-ci.dev",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="pulpaccessrequests",
+                name=body['metadata']['name'],
+                body={'status': new_status}
+            )
+            logger.info("Status updated successfully")
+        except Exception as status_e:
+            logger.error(f"Failed to update status: {status_e}")
+        
     except ApiException as e:
         if e.status == 409:
             if "Secret" in str(e) or "secret" in str(e):
                 logger.warning(f"Secret '{secret_name}' already exists.")
+                add_condition('Ready', 'True', 'SecretExists', f"Secret '{secret_name}' already exists")
             else:
                 logger.warning(f"ImageRepository 'pulp-access-controller-imagerepo' already exists.")
+                new_status['imageRepositoryCreated'] = True
+                add_condition('Ready', 'True', 'ImageRepositoryExists', 'ImageRepository already exists')
         else:
-            raise
+            add_condition('Ready', 'False', 'ApiError', f"API error: {str(e)}")
+        
+        # Update status in error cases
+        try:
+            custom_api.patch_namespaced_custom_object_status(
+                group="pulp.konflux-ci.dev",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="pulpaccessrequests",
+                name=body['metadata']['name'],
+                body={'status': new_status}
+            )
+        except Exception as status_e:
+            logger.error(f"Failed to update status: {status_e}")
+            
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+        add_condition('Ready', 'False', 'UnexpectedError', f"Unexpected error: {str(e)}")
+        
+        # Update status in error cases
+        try:
+            custom_api.patch_namespaced_custom_object_status(
+                group="pulp.konflux-ci.dev",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="pulpaccessrequests",
+                name=body['metadata']['name'],
+                body={'status': new_status}
+            )
+        except Exception as status_e:
+            logger.error(f"Failed to update status: {status_e}")
