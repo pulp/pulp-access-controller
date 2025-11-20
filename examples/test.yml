@@ -6,8 +6,16 @@ metadata:
   namespace: default
 type: Opaque
 stringData:
-  client_id: "8cd0a995-c3d8-4851-a834-fe5a43874f1b"
-  client_secret: "mIVUJzjMTMiNkkahOjvoyWJP6evon7XY"
+  tls.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIDXTCCAkWgAwIBAgIJAKl9H8tXcHMzMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV
+    ... your certificate content ...
+    -----END CERTIFICATE-----
+  tls.key: |
+    -----BEGIN PRIVATE KEY-----
+    MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj
+    ... your private key content ...
+    -----END PRIVATE KEY-----
 ---
 apiVersion: pulp.konflux-ci.dev/v1alpha1
 kind: PulpAccessRequest
@@ -17,7 +25,7 @@ metadata:
     app: test-app
     environment: test
   annotations:
-    description: "Konflux PulpAccessRequest with OAuth2 and domain creation"
+    description: "Konflux PulpAccessRequest with certificate-based authentication and domain creation"
 spec:
   credentialsSecretName: test-pulp-credentials
   use_quay_backend: true

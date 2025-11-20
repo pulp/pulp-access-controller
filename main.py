@@ -1,7 +1,7 @@
 import kopf
 import kubernetes.client
 from kubernetes.client.rest import ApiException
-from pulp_oauth2_auth import PulpOAuth2Session
+import requests
 import base64
 import os
 import time
@@ -69,18 +69,8 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
         secret_data = credentials_secret.data or {}
         
         # Extract credentials (decode from base64)
-        client_id = None
-        client_secret = None
         custom_cert = None
         custom_key = None
-        
-        if 'client_id' in secret_data:
-            client_id = base64.b64decode(secret_data['client_id']).decode('utf-8')
-            logger.info("Found client_id in credentials secret")
-        
-        if 'client_secret' in secret_data:
-            client_secret = base64.b64decode(secret_data['client_secret']).decode('utf-8')
-            logger.info("Found client_secret in credentials secret")
         
         if 'cert' in secret_data or 'tls.crt' in secret_data:
             cert_key = 'cert' if 'cert' in secret_data else 'tls.crt'
@@ -101,24 +91,11 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
         new_status['domain'] = domain
         
         # mTLS configuration
-        cli_toml_content = """[cli]
+        cli_toml_content = f"""[cli]
 base_url = "https://mtls.internal.console.redhat.com"
 api_root = "/api/pulp/"
 cert = "./tls.crt"
 key = "./tls.key"
-verify_ssl = true
-format = "json"
-dry_run = false
-timeout = 0
-verbose = 0
-"""
-
-        # OAuth configuration (created only if client credentials are provided)
-        oauth_cli_toml_content = f"""[cli]
-base_url = "https://console.redhat.com"
-api_root = "/api/pulp/"
-client_id = "{client_id}"
-client_secret = "{client_secret}"
 domain = "{domain if domain else ''}"
 verify_ssl = true
 format = "json"
@@ -148,53 +125,53 @@ verbose = 0
             secret_data["tls.key"] = encoded_key
             logger.info("Adding custom key to secret")
         
-        # Add optional client credentials and OAuth TOML if provided
-        if client_id:
-            encoded_client_id = base64.b64encode(client_id.encode('utf-8')).decode('utf-8')
-            secret_data["client_id"] = encoded_client_id
-            logger.info(f"Adding client_id to secret")
-        
-        if client_secret:
-            encoded_client_secret = base64.b64encode(client_secret.encode('utf-8')).decode('utf-8')
-            secret_data["client_secret"] = encoded_client_secret
-            logger.info(f"Adding client_secret to secret")
-        
-        # Add OAuth TOML configuration if both client credentials are provided
-        if client_id and client_secret:
-            encoded_oauth_cli_toml = base64.b64encode(oauth_cli_toml_content.encode('utf-8')).decode('utf-8')
-            secret_data["oauth-cli.toml"] = encoded_oauth_cli_toml
-            logger.info(f"Adding OAuth CLI configuration to secret")
-        
         # Add domain if provided
         if domain:
             encoded_domain = base64.b64encode(domain.encode('utf-8')).decode('utf-8')
             secret_data["domain"] = encoded_domain
             logger.info(f"Adding domain '{domain}' to secret")
             
-            # Create domain via Pulp API if credentials are available
-            if domain and client_id and client_secret:
+            # Create domain via Pulp API using certificate authentication
+            if domain and custom_cert and custom_key:
                 try:
-                    logger.info(f"Creating domain '{domain}' via Pulp API")
-                    session = PulpOAuth2Session(
-                        client_id=client_id,
-                        client_secret=client_secret,
-                        base_url="https://console.redhat.com"
-                    )
+                    logger.info(f"Creating domain '{domain}' via Pulp API with certificate authentication")
                     
-                    domain_data = {"name": domain}
-                    response = session.post("/api/pulp/create-domain/", json=domain_data)
+                    # Write cert and key to temporary files for requests to use
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.crt', delete=False) as cert_file:
+                        cert_file.write(custom_cert)
+                        cert_path = cert_file.name
                     
-                    if response.status_code == 201:
-                        logger.info(f"Domain '{domain}' created successfully via API")
-                        new_status['domainCreated'] = True
-                    elif response.status_code == 400 and "already exists" in response.text:
-                        logger.warning(f"Domain '{domain}' already exists")
-                        new_status['domainCreated'] = True
-                    else:
-                        logger.error(f"Failed to create domain '{domain}': {response.status_code} - {response.text}")
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.key', delete=False) as key_file:
+                        key_file.write(custom_key)
+                        key_path = key_file.name
+                    
+                    try:
+                        domain_data = {"name": domain}
+                        response = requests.post(
+                            "https://mtls.internal.console.redhat.com/api/pulp/create-domain/",
+                            json=domain_data,
+                            cert=(cert_path, key_path),
+                            verify=True
+                        )
+                        
+                        if response.status_code == 201:
+                            logger.info(f"Domain '{domain}' created successfully via API")
+                            new_status['domainCreated'] = True
+                        elif response.status_code == 400 and "already exists" in response.text:
+                            logger.warning(f"Domain '{domain}' already exists")
+                            new_status['domainCreated'] = True
+                        else:
+                            logger.error(f"Failed to create domain '{domain}': {response.status_code} - {response.text}")
+                    finally:
+                        # Clean up temporary files
+                        os.unlink(cert_path)
+                        os.unlink(key_path)
                         
                 except Exception as e:
                     logger.error(f"Error creating domain '{domain}': {str(e)}")
+            elif domain:
+                logger.warning("Cannot create domain: certificate and key are required")
 
         secret = kubernetes.client.V1Secret(
             metadata=kubernetes.client.V1ObjectMeta(
@@ -302,54 +279,69 @@ verbose = 0
                     
                 username, password = decoded_auth.split(':', 1)
                 
-                # Configure domain storage with OCI registry credentials
-                if domain and client_id and client_secret:
+                # Configure domain storage with OCI registry credentials using certificate authentication
+                if domain and custom_cert and custom_key:
                     logger.info(f"Configuring OCI storage for domain '{domain}' with repository '{pulp_quay_repository}'")
                     
-                    config_session = PulpOAuth2Session(
-                        client_id=client_id,
-                        client_secret=client_secret,
-                        base_url="https://console.redhat.com"
-                    )
+                    # Write cert and key to temporary files
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.crt', delete=False) as cert_file:
+                        cert_file.write(custom_cert)
+                        cert_path = cert_file.name
                     
-                    # Get domain information
-                    domain_response = config_session.get(f"/api/pulp/{domain}/api/v3/domains/?name={domain}&offset=0&limit=1")
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.key', delete=False) as key_file:
+                        key_file.write(custom_key)
+                        key_path = key_file.name
                     
-                    if domain_response.status_code == 200:
-                        domain_data = domain_response.json()
-                        if domain_data.get('count', 0) > 0 and domain_data.get('results'):
-                            domain_info = domain_data['results'][0]
-                            pulp_href = domain_info.get('pulp_href', '')
-                            
-                            if pulp_href:
-                                href_parts = pulp_href.rstrip('/').split('/')
-                                if len(href_parts) >= 8:
-                                    domain_uuid = href_parts[-1]
-                                    logger.info(f"Extracted domain UUID: {domain_uuid}")
-                                    
-                                    # Create OCI storage configuration
-                                    oci_data = {
-                                        "name": domain,
-                                        "pulp_labels": {},
-                                        "storage_class": "pulp_service.app.storage.OCIStorage",
-                                        "storage_settings": {
-                                            "password": password,
-                                            "username": username,
-                                            "repository": pulp_quay_repository
+                    try:
+                        # Get domain information
+                        domain_response = requests.get(
+                            f"https://mtls.internal.console.redhat.com/api/pulp/{domain}/api/v3/domains/?name={domain}&offset=0&limit=1",
+                            cert=(cert_path, key_path),
+                            verify=True
+                        )
+                        
+                        if domain_response.status_code == 200:
+                            domain_data = domain_response.json()
+                            if domain_data.get('count', 0) > 0 and domain_data.get('results'):
+                                domain_info = domain_data['results'][0]
+                                pulp_href = domain_info.get('pulp_href', '')
+                                
+                                if pulp_href:
+                                    href_parts = pulp_href.rstrip('/').split('/')
+                                    if len(href_parts) >= 8:
+                                        domain_uuid = href_parts[-1]
+                                        logger.info(f"Extracted domain UUID: {domain_uuid}")
+                                        
+                                        # Create OCI storage configuration
+                                        oci_data = {
+                                            "name": domain,
+                                            "pulp_labels": {},
+                                            "storage_class": "pulp_service.app.storage.OCIStorage",
+                                            "storage_settings": {
+                                                "password": password,
+                                                "username": username,
+                                                "repository": pulp_quay_repository
+                                            }
                                         }
-                                    }
-                                    
-                                    # Update domain with OCI storage
-                                    update_response = config_session.put(
-                                        f"/api/pulp/{domain}/api/v3/domains/{domain_uuid}/",
-                                        json=oci_data
-                                    )
-                                    
-                                    if update_response.status_code == 202:
-                                        logger.info(f"Successfully configured OCI storage for domain '{domain}'")
-                                        new_status['quayBackendConfigured'] = True
-                                    else:
-                                        logger.error(f"Failed to update domain '{domain}' storage: {update_response.status_code} - {update_response.text}")
+                                        
+                                        # Update domain with OCI storage
+                                        update_response = requests.put(
+                                            f"https://mtls.internal.console.redhat.com/api/pulp/{domain}/api/v3/domains/{domain_uuid}/",
+                                            json=oci_data,
+                                            cert=(cert_path, key_path),
+                                            verify=True
+                                        )
+                                        
+                                        if update_response.status_code == 202:
+                                            logger.info(f"Successfully configured OCI storage for domain '{domain}'")
+                                            new_status['quayBackendConfigured'] = True
+                                        else:
+                                            logger.error(f"Failed to update domain '{domain}' storage: {update_response.status_code} - {update_response.text}")
+                    finally:
+                        # Clean up temporary files
+                        os.unlink(cert_path)
+                        os.unlink(key_path)
             except ApiException as secret_e:
                 if secret_e.status == 404:
                     logger.warning(f"Generated secret '{secret_name}' not found yet in namespace '{namespace}'")
