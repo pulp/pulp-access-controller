@@ -34,7 +34,7 @@ spec:
               properties:
                 credentialsSecretName:
                   type: string
-                  description: "Name of the secret containing OAuth2 credentials (client_id, client_secret) and/or TLS certificates (cert/tls.crt, key/tls.key)"
+                  description: "Name of the secret containing TLS certificates (cert/tls.crt and key/tls.key) for mTLS authentication and domain creation"
                 use_quay_backend:
                   type: boolean
                   description: "Whether to configure Quay as the OCI backend storage for the domain (optional, defaults to false)"

@@ -6,23 +6,19 @@ A Kubernetes operator that automates the creation of secrets for accessing Red H
 
 The Pulp Access Controller simplifies access management for Red Hat Pulp by automatically creating Kubernetes secrets containing:
 - `cli.toml` - Configuration file for pulp-cli with mTLS settings (always included)
-- `oauth-cli.toml` - Configuration file for pulp-cli with OAuth2 settings (when client credentials provided)
 - `tls.crt` - Custom TLS certificate in base64 encoding (when custom certificate provided)
 - `tls.key` - Custom TLS private key in base64 encoding (when custom key provided)
-- `client_id` - OAuth2 client ID in base64 encoding (when provided)
-- `client_secret` - OAuth2 client secret in base64 encoding (when provided)  
 - `domain` - Pulp domain name in base64 encoding (when provided)
 - Optional ImageRepository resources for Quay.io OCI backend integration
 
 ## Features
 
-### **Multiple Authentication Methods**
+### **Certificate-Based Authentication**
 - **mTLS Authentication**: Support for mutual TLS using custom certificates
-- **OAuth2 Authentication**: Client credentials flow for API access
-- **Flexible Configuration**: Mix and match authentication methods as needed
+- **Secure Configuration**: All credentials stored securely in Kubernetes secrets
 
 ### **Automated Resource Management**
-- **Domain Creation**: Automatically create Pulp domains via API
+- **Domain Creation**: Automatically create Pulp domains via mTLS API
 - **Quay Integration**: Optional OCI storage backend configuration with Quay.io
 - **Secret Generation**: Automated Kubernetes secret creation with proper encoding
 
@@ -45,11 +41,7 @@ metadata:
   namespace: my-namespace
 type: Opaque
 stringData:
-  # OAuth2 credentials (optional, required for domain creation)
-  client_id: "my-client-id"
-  client_secret: "my-client-secret"
-  
-  # Custom TLS certificate and key (optional, for mTLS)
+  # TLS certificate and key (required for mTLS and domain creation)
   # Option 1: Use 'cert' and 'key'
   cert: |
     -----BEGIN CERTIFICATE-----
@@ -112,11 +104,8 @@ The controller creates a secret named `pulp-access` containing:
 | Key | Description | When Included |
 |-----|-------------|---------------|
 | `cli.toml` | mTLS configuration for pulp-cli | Always |
-| `oauth-cli.toml` | OAuth2 configuration for pulp-cli | When client credentials in referenced secret |
 | `tls.crt` | TLS certificate | When custom certificate in referenced secret |
 | `tls.key` | TLS private key | When custom key in referenced secret |
-| `client_id` | OAuth2 client ID | When provided in referenced secret |
-| `client_secret` | OAuth2 client secret | When provided in referenced secret |
 | `domain` | Pulp domain name (auto-generated as `konflux-<namespace>`) | Always |
 
 ## Credentials Secret Format
@@ -125,10 +114,8 @@ The credentials secret referenced by `credentialsSecretName` should contain:
 
 | Key | Description | Required |
 |-----|-------------|----------|
-| `client_id` | OAuth2 client ID | Optional (required for domain creation) |
-| `client_secret` | OAuth2 client secret | Optional (required for domain creation) |
-| `cert` or `tls.crt` | TLS certificate in PEM format | Optional (for mTLS) |
-| `key` or `tls.key` | TLS private key in PEM format | Optional (for mTLS) |
+| `cert` or `tls.crt` | TLS certificate in PEM format | Required (for mTLS and domain creation) |
+| `key` or `tls.key` | TLS private key in PEM format | Required (for mTLS and domain creation) |
 
 **Note**: The controller supports both `cert`/`key` and `tls.crt`/`tls.key` naming conventions for certificates.
 
