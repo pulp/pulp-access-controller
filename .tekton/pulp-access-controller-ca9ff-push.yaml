@@ -515,25 +515,6 @@ spec:
         operator: in
         values:
         - "false"
-    - name: apply-tags
-      params:
-      - name: ADDITIONAL_TAGS
-        value: ["v1.0.7"]
-      - name: IMAGE_URL
-        value: $(tasks.build-image-index.results.IMAGE_URL)
-      - name: IMAGE_DIGEST
-        value: $(tasks.build-image-index.results.IMAGE_DIGEST)
-      runAfter:
-      - build-image-index
-      taskRef:
-        params:
-        - name: name
-          value: apply-tags
-        - name: bundle
-          value: quay.io/konflux-ci/tekton-catalog/task-apply-tags:0.2@sha256:f44be1bf0262471f2f503f5e19da5f0628dcaf968c86272a2ad6b4871e708448
-        - name: kind
-          value: task
-        resolver: bundles
     - name: push-dockerfile
       params:
       - name: IMAGE
