@@ -515,3 +515,80 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
         logger.error(f"Unexpected error: {str(e)}")
         status.add_condition('Ready', 'False', 'UnexpectedError', f"Unexpected error: {str(e)}")
         update_status(custom_api, namespace, resource_name, status.data, logger)
+
+
+@kopf.on.update('pulp.konflux-ci.dev', 'v1alpha1', 'pulpaccessrequests')
+def update_pulp_access_request(body, spec, old, new, namespace, logger, **kwargs):
+    """Handler for PulpAccessRequest updates - updates the Kubernetes secret."""
+    api = kubernetes.client.CoreV1Api()
+    custom_api = kubernetes.client.CustomObjectsApi()
+    
+    resource_name = body['metadata']['name']
+    status = StatusTracker()
+    
+    # Preserve existing status data
+    existing_status = body.get('status', {})
+    status.data['domain'] = existing_status.get('domain')
+    status.data['domainCreated'] = existing_status.get('domainCreated', False)
+    status.data['imageRepositoryCreated'] = existing_status.get('imageRepositoryCreated', False)
+    status.data['quayBackendConfigured'] = existing_status.get('quayBackendConfigured', False)
+    
+    logger.info(f"Processing update for PulpAccessRequest '{resource_name}'")
+    
+    try:
+        # Get the credentials secret
+        credentials_secret_name = spec.get('credentialsSecretName')
+        credentials_secret = validate_credentials_secret(
+            api, credentials_secret_name, namespace, status, logger
+        )
+        
+        # Extract credentials
+        secret_data = credentials_secret.data or {}
+        custom_cert, custom_key = extract_credentials_from_secret(secret_data, logger)
+        
+        # Domain name based on namespace
+        domain = f"konflux-{namespace}"
+        status.data['domain'] = domain
+        
+        # Build updated secret data
+        pulp_secret_data = build_pulp_access_secret_data(domain, custom_cert, custom_key, logger)
+        
+        # Update the pulp-access secret
+        try:
+            existing_secret = api.read_namespaced_secret(PULP_ACCESS_SECRET_NAME, namespace)
+            existing_secret.data = pulp_secret_data
+            api.replace_namespaced_secret(PULP_ACCESS_SECRET_NAME, namespace, existing_secret)
+            logger.info(f"Secret '{PULP_ACCESS_SECRET_NAME}' updated in namespace '{namespace}'")
+        except ApiException as e:
+            if e.status == 404:
+                # Secret doesn't exist, create it
+                owner_ref = create_owner_reference(body)
+                create_kubernetes_secret(api, namespace, PULP_ACCESS_SECRET_NAME, pulp_secret_data, owner_ref, logger)
+            else:
+                raise
+        
+        status.add_condition('Ready', 'True', 'Updated', f"Secret '{PULP_ACCESS_SECRET_NAME}' updated successfully")
+        update_status(custom_api, namespace, resource_name, status.data, logger)
+        logger.info("PulpAccessRequest update completed successfully")
+        
+    except (kopf.PermanentError, kopf.TemporaryError):
+        update_status(custom_api, namespace, resource_name, status.data, logger)
+        raise
+        
+    except Exception as e:
+        logger.error(f"Unexpected error during update: {str(e)}")
+        status.add_condition('Ready', 'False', 'UpdateError', f"Unexpected error: {str(e)}")
+        update_status(custom_api, namespace, resource_name, status.data, logger)
+
+
+@kopf.on.delete('pulp.konflux-ci.dev', 'v1alpha1', 'pulpaccessrequests')
+def delete_pulp_access_request(body, namespace, logger, **kwargs):
+    """Handler for PulpAccessRequest deletion."""
+    resource_name = body['metadata']['name']
+    logger.info(f"Processing deletion for PulpAccessRequest '{resource_name}'")
+    
+    # Kubernetes automatically deletes owned resources (pulp-access secret, ImageRepository)
+    # due to owner references set during creation - no manual cleanup needed
+    
+    logger.info(f"PulpAccessRequest '{resource_name}' deleted. Owned resources will be garbage collected.")
+
