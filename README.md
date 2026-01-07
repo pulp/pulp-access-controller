@@ -5,20 +5,24 @@ A Kubernetes operator that automates the creation of secrets for accessing Red H
 ## Overview
 
 The Pulp Access Controller simplifies access management for Red Hat Pulp by automatically creating Kubernetes secrets containing:
-- `cli.toml` - Configuration file for pulp-cli with mTLS settings (always included)
-- `tls.crt` - Custom TLS certificate in base64 encoding (when custom certificate provided)
-- `tls.key` - Custom TLS private key in base64 encoding (when custom key provided)
+- `cli.toml` - Configuration file for pulp-cli with authentication settings (always included)
+- `tls.crt` - Custom TLS certificate in base64 encoding (when using certificate auth)
+- `tls.key` - Custom TLS private key in base64 encoding (when using certificate auth)
+- `username` - Username for Basic Auth (when using username/password auth)
+- `password` - Password for Basic Auth (when using username/password auth)
 - `domain` - Pulp domain name in base64 encoding (when provided)
 - Optional ImageRepository resources for Quay.io OCI backend integration
 
 ## Features
 
-### **Certificate-Based Authentication**
-- **mTLS Authentication**: Support for mutual TLS using custom certificates
-- **Secure Configuration**: All credentials stored securely in Kubernetes secrets
+### **Dual Authentication Support**
+- **Certificate-Based (mTLS)**: Mutual TLS using custom certificates
+- **Basic Auth**: Username and password authentication
+- **Automatic Detection**: Controller automatically detects which credentials are provided
+- **Priority**: Certificate auth takes precedence if both are provided
 
 ### **Automated Resource Management**
-- **Domain Creation**: Automatically create Pulp domains via mTLS API
+- **Domain Creation**: Automatically create Pulp domains via API
 - **Quay Integration**: Optional OCI storage backend configuration with Quay.io
 - **Secret Generation**: Automated Kubernetes secret creation with proper encoding
 
@@ -31,7 +35,9 @@ The Pulp Access Controller simplifies access management for Red Hat Pulp by auto
 
 ### Step 1: Create a Credentials Secret
 
-First, create a Kubernetes secret containing your credentials:
+First, create a Kubernetes secret containing your credentials. You can use either certificate-based or username/password authentication:
+
+#### Option A: Certificate-Based Authentication (mTLS)
 
 ```yaml
 apiVersion: v1
@@ -41,8 +47,7 @@ metadata:
   namespace: my-namespace
 type: Opaque
 stringData:
-  # TLS certificate and key (required for mTLS and domain creation)
-  # Option 1: Use 'cert' and 'key'
+  # TLS certificate and key (use 'cert'/'key' or 'tls.crt'/'tls.key')
   cert: |
     -----BEGIN CERTIFICATE-----
     ... your certificate content ...
@@ -51,17 +56,23 @@ stringData:
     -----BEGIN PRIVATE KEY-----
     ... your private key content ...
     -----END PRIVATE KEY-----
-  
-  # Option 2: Use 'tls.crt' and 'tls.key' (alternative naming)
-  # tls.crt: |
-  #   -----BEGIN CERTIFICATE-----
-  #   ...
-  #   -----END CERTIFICATE-----
-  # tls.key: |
-  #   -----BEGIN PRIVATE KEY-----
-  #   ...
-  #   -----END PRIVATE KEY-----
 ```
+
+#### Option B: Username/Password Authentication (Basic Auth)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pulp-credentials
+  namespace: my-namespace
+type: Opaque
+stringData:
+  username: my-pulp-username
+  password: my-pulp-password
+```
+
+**Note**: If both certificate and username/password credentials are provided, certificate-based authentication takes precedence.
 
 ### Step 2: Create a PulpAccessRequest
 
@@ -103,21 +114,56 @@ The controller creates a secret named `pulp-access` containing:
 
 | Key | Description | When Included |
 |-----|-------------|---------------|
-| `cli.toml` | mTLS configuration for pulp-cli | Always |
-| `tls.crt` | TLS certificate | When custom certificate in referenced secret |
-| `tls.key` | TLS private key | When custom key in referenced secret |
+| `cli.toml` | Authentication configuration for pulp-cli | Always |
+| `tls.crt` | TLS certificate | When using certificate auth |
+| `tls.key` | TLS private key | When using certificate auth |
+| `username` | Username | When using Basic Auth |
+| `password` | Password | When using Basic Auth |
 | `domain` | Pulp domain name (auto-generated as `konflux-<namespace>`) | Always |
+
+### cli.toml Format
+
+**For Certificate Auth:**
+```toml
+[cli]
+base_url = "https://mtls.internal.console.redhat.com"
+api_root = "/api/pulp/"
+cert = "./tls.crt"
+key = "./tls.key"
+domain = "konflux-my-namespace"
+verify_ssl = true
+format = "json"
+```
+
+**For Basic Auth:**
+```toml
+[cli]
+base_url = "https://mtls.internal.console.redhat.com"
+api_root = "/api/pulp/"
+username = "my-pulp-username"
+password = "my-pulp-password"
+domain = "konflux-my-namespace"
+verify_ssl = true
+format = "json"
+```
 
 ## Credentials Secret Format
 
-The credentials secret referenced by `credentialsSecretName` should contain:
+The credentials secret referenced by `credentialsSecretName` should contain one of the following:
 
+### Certificate Authentication (mTLS)
 | Key | Description | Required |
 |-----|-------------|----------|
-| `cert` or `tls.crt` | TLS certificate in PEM format | Required (for mTLS and domain creation) |
-| `key` or `tls.key` | TLS private key in PEM format | Required (for mTLS and domain creation) |
+| `cert` or `tls.crt` | TLS certificate in PEM format | Yes |
+| `key` or `tls.key` | TLS private key in PEM format | Yes |
 
-**Note**: The controller supports both `cert`/`key` and `tls.crt`/`tls.key` naming conventions for certificates.
+### Basic Authentication
+| Key | Description | Required |
+|-----|-------------|----------|
+| `username` | Pulp username | Yes |
+| `password` | Pulp password | Yes |
+
+**Note**: The controller supports both authentication methods. If both are provided, certificate-based authentication takes precedence.
 
 ## Checking Status
 
