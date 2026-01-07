@@ -78,11 +78,22 @@ def create_owner_reference(body: dict) -> kubernetes.client.V1OwnerReference:
     )
 
 
-def extract_credentials_from_secret(secret_data: dict, logger) -> Tuple[Optional[str], Optional[str]]:
-    """Extract certificate and key from a Kubernetes secret."""
+def extract_credentials_from_secret(secret_data: dict, logger) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """
+    Extract credentials from a Kubernetes secret.
+    Supports both certificate-based (mTLS) and username/password (Basic Auth) authentication.
+    
+    Returns:
+        Tuple of (cert, key, username, password)
+        - If cert/key are present, they take precedence (mTLS auth)
+        - If only username/password are present, use Basic Auth
+    """
     custom_cert = None
     custom_key = None
+    username = None
+    password = None
     
+    # Extract certificate credentials
     if 'cert' in secret_data or 'tls.crt' in secret_data:
         cert_key = 'cert' if 'cert' in secret_data else 'tls.crt'
         custom_cert = base64.b64decode(secret_data[cert_key]).decode('utf-8')
@@ -93,12 +104,54 @@ def extract_credentials_from_secret(secret_data: dict, logger) -> Tuple[Optional
         custom_key = base64.b64decode(secret_data[key_key]).decode('utf-8')
         logger.info(f"Found key in credentials secret (key: {key_key})")
     
-    return custom_cert, custom_key
+    # Extract username/password credentials
+    if 'username' in secret_data:
+        username = base64.b64decode(secret_data['username']).decode('utf-8')
+        logger.info("Found username in credentials secret")
+    
+    if 'password' in secret_data:
+        password = base64.b64decode(secret_data['password']).decode('utf-8')
+        logger.info("Found password in credentials secret")
+    
+    # Log authentication method detection
+    if custom_cert and custom_key:
+        logger.info("Using certificate-based (mTLS) authentication")
+    elif username and password:
+        logger.info("Using username/password (Basic Auth) authentication")
+    else:
+        logger.warning("No complete authentication credentials found")
+    
+    return custom_cert, custom_key, username, password
 
 
-def generate_cli_toml(domain: str) -> str:
-    """Generate the CLI TOML configuration content."""
-    return f"""[cli]
+def generate_cli_toml(domain: str, auth_type: str = "cert", username: str = None, password: str = None) -> str:
+    """
+    Generate the CLI TOML configuration content.
+    
+    Args:
+        domain: The Pulp domain name
+        auth_type: "cert" for certificate-based auth, "basic" for username/password
+        username: Username for basic auth (required if auth_type="basic")
+        password: Password for basic auth (required if auth_type="basic")
+    
+    Returns:
+        CLI TOML configuration string
+    """
+    if auth_type == "basic":
+        return f"""[cli]
+base_url = "{PULP_API_BASE_URL}"
+api_root = "/api/pulp/"
+username = "{username if username else ''}"
+password = "{password if password else ''}"
+domain = "{domain if domain else ''}"
+verify_ssl = true
+format = "json"
+dry_run = false
+timeout = 0
+verbose = 0
+"""
+    else:
+        return f"""[cli]
 base_url = "{PULP_API_BASE_URL}"
 api_root = "/api/pulp/"
 cert = "./tls.crt"
@@ -112,29 +165,64 @@ verbose = 0
 """
 
 
-def create_pulp_domain(domain: str, cert: str, key: str, logger) -> bool:
-    """Create a Pulp domain via the API using certificate authentication."""
-    logger.info(f"Creating domain '{domain}' via Pulp API with certificate authentication")
+def create_pulp_domain(
+    domain: str,
+    cert: str = None,
+    key: str = None,
+    username: str = None,
+    password: str = None,
+    logger = None
+) -> bool:
+    """
+    Create a Pulp domain via the API.
+    
+    Supports both certificate-based (mTLS) and Basic Auth authentication.
+    If cert/key are provided, uses mTLS. Otherwise falls back to Basic Auth.
+    
+    Args:
+        domain: The domain name to create
+        cert: TLS certificate content (for mTLS)
+        key: TLS key content (for mTLS)
+        username: Username (for Basic Auth)
+        password: Password (for Basic Auth)
+        logger: Logger instance
+    
+    Returns:
+        True if domain was created or already exists, False otherwise
+    """
+    use_cert_auth = cert and key
+    auth_method = "certificate" if use_cert_auth else "Basic Auth"
+    logger.info(f"Creating domain '{domain}' via Pulp API with {auth_method} authentication")
     
     try:
-        with temp_cert_files(cert, key) as (cert_path, key_path):
-            domain_data = {"name": domain}
+        domain_data = {"name": domain}
+        
+        if use_cert_auth:
+            with temp_cert_files(cert, key) as (cert_path, key_path):
+                response = requests.post(
+                    f"{PULP_API_BASE_URL}/api/pulp/create-domain/",
+                    json=domain_data,
+                    cert=(cert_path, key_path),
+                    verify=True
+                )
+        else:
+            # Use Basic Auth
             response = requests.post(
                 f"{PULP_API_BASE_URL}/api/pulp/create-domain/",
                 json=domain_data,
-                cert=(cert_path, key_path),
+                auth=(username, password),
                 verify=True
             )
-            
-            if response.status_code == 201:
-                logger.info(f"Domain '{domain}' created successfully via API")
-                return True
-            elif response.status_code == 400 and "already exists" in response.text:
-                logger.warning(f"Domain '{domain}' already exists")
-                return True
-            else:
-                logger.error(f"Failed to create domain '{domain}': {response.status_code} - {response.text}")
-                return False
+        
+        if response.status_code == 201:
+            logger.info(f"Domain '{domain}' created successfully via API")
+            return True
+        elif response.status_code == 400 and "already exists" in response.text:
+            logger.warning(f"Domain '{domain}' already exists")
+            return True
+        else:
+            logger.error(f"Failed to create domain '{domain}': {response.status_code} - {response.text}")
+            return False
     except Exception as e:
         logger.error(f"Error creating domain '{domain}': {str(e)}")
         return False
@@ -144,14 +232,41 @@ def build_pulp_access_secret_data(
     domain: str,
     custom_cert: Optional[str],
     custom_key: Optional[str],
+    username: Optional[str],
+    password: Optional[str],
     logger
 ) -> dict:
-    """Build the data for the pulp-access Kubernetes secret."""
-    cli_toml_content = generate_cli_toml(domain)
-    encoded_cli_toml = base64.b64encode(cli_toml_content.encode('utf-8')).decode('utf-8')
+    """
+    Build the data for the pulp-access Kubernetes secret.
     
+    Supports both certificate-based (mTLS) and username/password (Basic Auth) authentication.
+    If cert/key are provided, they take precedence.
+    
+    Args:
+        domain: The Pulp domain name
+        custom_cert: TLS certificate content (for mTLS)
+        custom_key: TLS key content (for mTLS)
+        username: Username (for Basic Auth)
+        password: Password (for Basic Auth)
+        logger: Logger instance
+    
+    Returns:
+        Dictionary containing the secret data
+    """
+    # Determine auth type - cert takes precedence if both are provided
+    use_cert_auth = custom_cert and custom_key
+    
+    if use_cert_auth:
+        cli_toml_content = generate_cli_toml(domain, auth_type="cert")
+        logger.info("Building secret with certificate-based authentication")
+    else:
+        cli_toml_content = generate_cli_toml(domain, auth_type="basic", username=username, password=password)
+        logger.info("Building secret with Basic Auth authentication")
+    
+    encoded_cli_toml = base64.b64encode(cli_toml_content.encode('utf-8')).decode('utf-8')
     secret_data = {"cli.toml": encoded_cli_toml}
     
+    # Add certificate data if using mTLS
     if custom_cert:
         secret_data["tls.crt"] = base64.b64encode(custom_cert.encode('utf-8')).decode('utf-8')
         logger.info("Adding custom certificate to secret")
@@ -159,6 +274,15 @@ def build_pulp_access_secret_data(
     if custom_key:
         secret_data["tls.key"] = base64.b64encode(custom_key.encode('utf-8')).decode('utf-8')
         logger.info("Adding custom key to secret")
+    
+    # Add username/password if using Basic Auth (and not cert auth)
+    if not use_cert_auth:
+        if username:
+            secret_data["username"] = base64.b64encode(username.encode('utf-8')).decode('utf-8')
+            logger.info("Adding username to secret")
+        if password:
+            secret_data["password"] = base64.b64encode(password.encode('utf-8')).decode('utf-8')
+            logger.info("Adding password to secret")
     
     if domain:
         secret_data["domain"] = base64.b64encode(domain.encode('utf-8')).decode('utf-8')
@@ -288,76 +412,103 @@ def extract_quay_credentials_from_secret(
 
 def configure_quay_backend(
     domain: str,
-    cert: str,
-    key: str,
-    username: str,
-    password: str,
+    quay_username: str,
+    quay_password: str,
     repository: str,
-    logger
+    logger,
+    cert: str = None,
+    key: str = None,
+    auth_username: str = None,
+    auth_password: str = None
 ) -> bool:
-    """Configure Quay as the OCI storage backend for a Pulp domain."""
-    logger.info(f"Configuring OCI storage for domain '{domain}' with repository '{repository}'")
+    """
+    Configure Quay as the OCI storage backend for a Pulp domain.
+    
+    Supports both certificate-based (mTLS) and Basic Auth authentication for the API calls.
+    
+    Args:
+        domain: The Pulp domain name
+        quay_username: Quay registry username for OCI storage
+        quay_password: Quay registry password for OCI storage
+        repository: Quay repository name
+        logger: Logger instance
+        cert: TLS certificate content (for mTLS API auth)
+        key: TLS key content (for mTLS API auth)
+        auth_username: Username for Basic Auth API calls
+        auth_password: Password for Basic Auth API calls
+    
+    Returns:
+        True if configuration succeeded, False otherwise
+    """
+    use_cert_auth = cert and key
+    auth_method = "certificate" if use_cert_auth else "Basic Auth"
+    logger.info(f"Configuring OCI storage for domain '{domain}' with repository '{repository}' using {auth_method}")
     
     try:
-        with temp_cert_files(cert, key) as (cert_path, key_path):
-            # Get domain information
-            domain_response = requests.get(
-                f"{PULP_API_BASE_URL}/api/pulp/{domain}/api/v3/domains/?name={domain}&offset=0&limit=1",
-                cert=(cert_path, key_path),
-                verify=True
-            )
-            
-            if domain_response.status_code != 200:
-                logger.error(f"Failed to get domain info: {domain_response.status_code}")
-                return False
-            
-            domain_data = domain_response.json()
-            if not (domain_data.get('count', 0) > 0 and domain_data.get('results')):
-                logger.error(f"Domain '{domain}' not found in API response")
-                return False
-            
-            domain_info = domain_data['results'][0]
-            pulp_href = domain_info.get('pulp_href', '')
-            
-            if not pulp_href:
-                logger.error("No pulp_href found in domain info")
-                return False
-            
-            href_parts = pulp_href.rstrip('/').split('/')
-            if len(href_parts) < 8:
-                logger.error(f"Invalid pulp_href format: {pulp_href}")
-                return False
-            
-            domain_uuid = href_parts[-1]
-            logger.info(f"Extracted domain UUID: {domain_uuid}")
-            
-            # Create OCI storage configuration
-            oci_data = {
-                "name": domain,
-                "pulp_labels": {},
-                "storage_class": "pulp_service.app.storage.OCIStorage",
-                "storage_settings": {
-                    "password": password,
-                    "username": username,
-                    "repository": repository
-                }
-            }
-            
-            # Update domain with OCI storage
-            update_response = requests.put(
-                f"{PULP_API_BASE_URL}/api/pulp/{domain}/api/v3/domains/{domain_uuid}/",
-                json=oci_data,
-                cert=(cert_path, key_path),
-                verify=True
-            )
-            
-            if update_response.status_code == 202:
-                logger.info(f"Successfully configured OCI storage for domain '{domain}'")
-                return True
+        # Helper function to make authenticated requests
+        def make_request(method, url, **kwargs):
+            if use_cert_auth:
+                with temp_cert_files(cert, key) as (cert_path, key_path):
+                    return getattr(requests, method)(url, cert=(cert_path, key_path), verify=True, **kwargs)
             else:
-                logger.error(f"Failed to update domain storage: {update_response.status_code} - {update_response.text}")
-                return False
-                
+                return getattr(requests, method)(url, auth=(auth_username, auth_password), verify=True, **kwargs)
+        
+        # Get domain information
+        domain_response = make_request(
+            'get',
+            f"{PULP_API_BASE_URL}/api/pulp/{domain}/api/v3/domains/?name={domain}&offset=0&limit=1"
+        )
+        
+        if domain_response.status_code != 200:
+            logger.error(f"Failed to get domain info: {domain_response.status_code}")
+            return False
+        
+        domain_data = domain_response.json()
+        if not (domain_data.get('count', 0) > 0 and domain_data.get('results')):
+            logger.error(f"Domain '{domain}' not found in API response")
+            return False
+        
+        domain_info = domain_data['results'][0]
+        pulp_href = domain_info.get('pulp_href', '')
+        
+        if not pulp_href:
+            logger.error("No pulp_href found in domain info")
+            return False
+        
+        href_parts = pulp_href.rstrip('/').split('/')
+        if len(href_parts) < 8:
+            logger.error(f"Invalid pulp_href format: {pulp_href}")
+            return False
+        
+        domain_uuid = href_parts[-1]
+        logger.info(f"Extracted domain UUID: {domain_uuid}")
+        
+        # Create OCI storage configuration
+        oci_data = {
+            "name": domain,
+            "pulp_labels": {},
+            "storage_class": "pulp_service.app.storage.OCIStorage",
+            "storage_settings": {
+                "password": quay_password,
+                "username": quay_username,
+                "repository": repository
+            }
+        }
+        
+        # Update domain with OCI storage
+        update_response = make_request(
+            'put',
+            f"{PULP_API_BASE_URL}/api/pulp/{domain}/api/v3/domains/{domain_uuid}/",
+            json=oci_data
+        )
+        
+        if update_response.status_code == 202:
+            logger.info(f"Successfully configured OCI storage for domain '{domain}'")
+            return True
+        else:
+            logger.error(f"Failed to update domain storage: {update_response.status_code} - {update_response.text}")
+            return False
+            
     except Exception as e:
         logger.error(f"Error configuring Quay backend: {str(e)}")
         return False
@@ -443,24 +594,37 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
             api, credentials_secret_name, namespace, status, logger
         )
         
-        # Extract credentials
+        # Extract credentials (supports both cert/key and username/password)
         secret_data = credentials_secret.data or {}
-        custom_cert, custom_key = extract_credentials_from_secret(secret_data, logger)
+        custom_cert, custom_key, auth_username, auth_password = extract_credentials_from_secret(secret_data, logger)
+        
+        # Determine authentication method - cert takes precedence
+        use_cert_auth = custom_cert and custom_key
+        has_valid_auth = use_cert_auth or (auth_username and auth_password)
         
         # Generate domain name
         domain = f"konflux-{namespace}"
         logger.info(f"Generated domain name: {domain}")
         status.data['domain'] = domain
         
-        # Create Pulp domain if we have credentials
-        if domain and custom_cert and custom_key:
-            status.data['domainCreated'] = create_pulp_domain(domain, custom_cert, custom_key, logger)
+        # Create Pulp domain if we have valid credentials
+        if domain and has_valid_auth:
+            status.data['domainCreated'] = create_pulp_domain(
+                domain,
+                cert=custom_cert,
+                key=custom_key,
+                username=auth_username,
+                password=auth_password,
+                logger=logger
+            )
         elif domain:
-            logger.warning("Cannot create domain: certificate and key are required")
+            logger.warning("Cannot create domain: either certificate/key or username/password are required")
         
         # Build and create the pulp-access secret
         owner_ref = create_owner_reference(body)
-        pulp_secret_data = build_pulp_access_secret_data(domain, custom_cert, custom_key, logger)
+        pulp_secret_data = build_pulp_access_secret_data(
+            domain, custom_cert, custom_key, auth_username, auth_password, logger
+        )
         create_kubernetes_secret(api, namespace, PULP_ACCESS_SECRET_NAME, pulp_secret_data, owner_ref, logger)
         
         # Configure Quay backend if requested
@@ -477,10 +641,18 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
             image_repo_secret_name = f"{IMAGE_REPO_NAME}{IMAGE_REPO_SECRET_SUFFIX}"
             quay_creds = extract_quay_credentials_from_secret(api, namespace, image_repo_secret_name, logger)
             
-            if quay_creds and custom_cert and custom_key:
-                username, password, repository = quay_creds
+            if quay_creds and has_valid_auth:
+                quay_username, quay_password, repository = quay_creds
                 status.data['quayBackendConfigured'] = configure_quay_backend(
-                    domain, custom_cert, custom_key, username, password, repository, logger
+                    domain=domain,
+                    quay_username=quay_username,
+                    quay_password=quay_password,
+                    repository=repository,
+                    logger=logger,
+                    cert=custom_cert,
+                    key=custom_key,
+                    auth_username=auth_username,
+                    auth_password=auth_password
                 )
         else:
             logger.info("Skipping ImageRepository creation and OCI storage configuration - use_quay_backend is False")
@@ -542,16 +714,18 @@ def update_pulp_access_request(body, spec, old, new, namespace, logger, **kwargs
             api, credentials_secret_name, namespace, status, logger
         )
         
-        # Extract credentials
+        # Extract credentials (supports both cert/key and username/password)
         secret_data = credentials_secret.data or {}
-        custom_cert, custom_key = extract_credentials_from_secret(secret_data, logger)
+        custom_cert, custom_key, auth_username, auth_password = extract_credentials_from_secret(secret_data, logger)
         
         # Domain name based on namespace
         domain = f"konflux-{namespace}"
         status.data['domain'] = domain
         
         # Build updated secret data
-        pulp_secret_data = build_pulp_access_secret_data(domain, custom_cert, custom_key, logger)
+        pulp_secret_data = build_pulp_access_secret_data(
+            domain, custom_cert, custom_key, auth_username, auth_password, logger
+        )
         
         # Update the pulp-access secret
         try:
@@ -583,12 +757,40 @@ def update_pulp_access_request(body, spec, old, new, namespace, logger, **kwargs
 
 @kopf.on.delete('pulp.konflux-ci.dev', 'v1alpha1', 'pulpaccessrequests')
 def delete_pulp_access_request(body, namespace, logger, **kwargs):
-    """Handler for PulpAccessRequest deletion."""
+    """Handler for PulpAccessRequest deletion - cleans up created resources."""
+    api = kubernetes.client.CoreV1Api()
+    custom_api = kubernetes.client.CustomObjectsApi()
+    
     resource_name = body['metadata']['name']
     logger.info(f"Processing deletion for PulpAccessRequest '{resource_name}'")
     
-    # Kubernetes automatically deletes owned resources (pulp-access secret, ImageRepository)
-    # due to owner references set during creation - no manual cleanup needed
+    # Delete the pulp-access secret
+    try:
+        api.delete_namespaced_secret(PULP_ACCESS_SECRET_NAME, namespace)
+        logger.info(f"Secret '{PULP_ACCESS_SECRET_NAME}' deleted from namespace '{namespace}'")
+    except ApiException as e:
+        if e.status == 404:
+            logger.info(f"Secret '{PULP_ACCESS_SECRET_NAME}' not found, already deleted")
+        else:
+            logger.error(f"Error deleting secret '{PULP_ACCESS_SECRET_NAME}': {e}")
     
-    logger.info(f"PulpAccessRequest '{resource_name}' deleted. Owned resources will be garbage collected.")
+    # Delete the ImageRepository if it was created
+    existing_status = body.get('status', {})
+    if existing_status.get('imageRepositoryCreated', False):
+        try:
+            custom_api.delete_namespaced_custom_object(
+                group="appstudio.redhat.com",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="imagerepositories",
+                name=IMAGE_REPO_NAME
+            )
+            logger.info(f"ImageRepository '{IMAGE_REPO_NAME}' deleted from namespace '{namespace}'")
+        except ApiException as e:
+            if e.status == 404:
+                logger.info(f"ImageRepository '{IMAGE_REPO_NAME}' not found, already deleted")
+            else:
+                logger.error(f"Error deleting ImageRepository '{IMAGE_REPO_NAME}': {e}")
+    
+    logger.info(f"PulpAccessRequest '{resource_name}' cleanup completed")
 
