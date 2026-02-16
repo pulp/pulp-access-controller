@@ -24,8 +24,6 @@ spec:
     value: '{{revision}}'
   - name: output-image
     value: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:on-pr-{{revision}}
-  - name: image-expires-after
-    value: 5d
   - name: dockerfile
     value: /docker/Dockerfile
   pipelineSpec:
