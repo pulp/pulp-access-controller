@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple, Dict, Any
 
 # Configuration constants
-PULP_API_BASE_URL = "https://mtls.internal.console.redhat.com"
+PULP_API_BASE_URL = "https://packages.redhat.com"
 PULP_ACCESS_SECRET_NAME = "pulp-access"
 IMAGE_REPO_NAME = "pulp-access-controller-imagerepo"
 IMAGE_REPO_SECRET_SUFFIX = "-image-push"
@@ -85,8 +85,8 @@ def extract_credentials_from_secret(secret_data: dict, logger) -> Tuple[Optional
     
     Returns:
         Tuple of (cert, key, username, password)
-        - If cert/key are present, they take precedence (mTLS auth)
-        - If only username/password are present, use Basic Auth
+        - If username/password are present, they take precedence (Basic Auth)
+        - If only cert/key are present, use mTLS auth
     """
     custom_cert = None
     custom_key = None
@@ -113,11 +113,11 @@ def extract_credentials_from_secret(secret_data: dict, logger) -> Tuple[Optional
         password = base64.b64decode(secret_data['password']).decode('utf-8')
         logger.info("Found password in credentials secret")
     
-    # Log authentication method detection
-    if custom_cert and custom_key:
-        logger.info("Using certificate-based (mTLS) authentication")
-    elif username and password:
+    # Log authentication method detection - username/password takes precedence
+    if username and password:
         logger.info("Using username/password (Basic Auth) authentication")
+    elif custom_cert and custom_key:
+        logger.info("Using certificate-based (mTLS) authentication")
     else:
         logger.warning("No complete authentication credentials found")
     
@@ -190,14 +190,21 @@ def create_pulp_domain(
     Returns:
         True if domain was created or already exists, False otherwise
     """
-    use_cert_auth = cert and key
-    auth_method = "certificate" if use_cert_auth else "Basic Auth"
+    use_basic_auth = username and password
+    auth_method = "Basic Auth" if use_basic_auth else "certificate"
     logger.info(f"Creating domain '{domain}' via Pulp API with {auth_method} authentication")
     
     try:
         domain_data = {"name": domain}
         
-        if use_cert_auth:
+        if use_basic_auth:
+            response = requests.post(
+                f"{PULP_API_BASE_URL}/api/pulp/create-domain/",
+                json=domain_data,
+                auth=(username, password),
+                verify=True
+            )
+        elif cert and key:
             with temp_cert_files(cert, key) as (cert_path, key_path):
                 response = requests.post(
                     f"{PULP_API_BASE_URL}/api/pulp/create-domain/",
@@ -206,13 +213,8 @@ def create_pulp_domain(
                     verify=True
                 )
         else:
-            # Use Basic Auth
-            response = requests.post(
-                f"{PULP_API_BASE_URL}/api/pulp/create-domain/",
-                json=domain_data,
-                auth=(username, password),
-                verify=True
-            )
+            logger.error(f"No valid credentials provided for domain '{domain}'")
+            return False
         
         if response.status_code == 201:
             logger.info(f"Domain '{domain}' created successfully via API")
@@ -239,8 +241,8 @@ def build_pulp_access_secret_data(
     """
     Build the data for the pulp-access Kubernetes secret.
     
-    Supports both certificate-based (mTLS) and username/password (Basic Auth) authentication.
-    If cert/key are provided, they take precedence.
+    Supports both username/password (Basic Auth) and certificate-based (mTLS) authentication.
+    If username/password are provided, they take precedence.
     
     Args:
         domain: The Pulp domain name
@@ -253,36 +255,31 @@ def build_pulp_access_secret_data(
     Returns:
         Dictionary containing the secret data
     """
-    # Determine auth type - cert takes precedence if both are provided
-    use_cert_auth = custom_cert and custom_key
+    use_basic_auth = username and password
     
-    if use_cert_auth:
+    if use_basic_auth:
+        cli_toml_content = generate_cli_toml(domain, auth_type="basic", username=username, password=password)
+        logger.info("Building secret with Basic Auth authentication")
+    elif custom_cert and custom_key:
         cli_toml_content = generate_cli_toml(domain, auth_type="cert")
         logger.info("Building secret with certificate-based authentication")
     else:
         cli_toml_content = generate_cli_toml(domain, auth_type="basic", username=username, password=password)
-        logger.info("Building secret with Basic Auth authentication")
+        logger.info("Building secret with incomplete credentials")
     
     encoded_cli_toml = base64.b64encode(cli_toml_content.encode('utf-8')).decode('utf-8')
     secret_data = {"cli.toml": encoded_cli_toml}
     
-    # Add certificate data if using mTLS
-    if custom_cert:
+    if use_basic_auth:
+        secret_data["username"] = base64.b64encode(username.encode('utf-8')).decode('utf-8')
+        logger.info("Adding username to secret")
+        secret_data["password"] = base64.b64encode(password.encode('utf-8')).decode('utf-8')
+        logger.info("Adding password to secret")
+    elif custom_cert and custom_key:
         secret_data["tls.crt"] = base64.b64encode(custom_cert.encode('utf-8')).decode('utf-8')
         logger.info("Adding custom certificate to secret")
-    
-    if custom_key:
         secret_data["tls.key"] = base64.b64encode(custom_key.encode('utf-8')).decode('utf-8')
         logger.info("Adding custom key to secret")
-    
-    # Add username/password if using Basic Auth (and not cert auth)
-    if not use_cert_auth:
-        if username:
-            secret_data["username"] = base64.b64encode(username.encode('utf-8')).decode('utf-8')
-            logger.info("Adding username to secret")
-        if password:
-            secret_data["password"] = base64.b64encode(password.encode('utf-8')).decode('utf-8')
-            logger.info("Adding password to secret")
     
     if domain:
         secret_data["domain"] = base64.b64encode(domain.encode('utf-8')).decode('utf-8')
@@ -440,18 +437,19 @@ def configure_quay_backend(
     Returns:
         True if configuration succeeded, False otherwise
     """
-    use_cert_auth = cert and key
-    auth_method = "certificate" if use_cert_auth else "Basic Auth"
+    use_basic_auth = auth_username and auth_password
+    auth_method = "Basic Auth" if use_basic_auth else "certificate"
     logger.info(f"Configuring OCI storage for domain '{domain}' with repository '{repository}' using {auth_method}")
     
     try:
-        # Helper function to make authenticated requests
         def make_request(method, url, **kwargs):
-            if use_cert_auth:
+            if use_basic_auth:
+                return getattr(requests, method)(url, auth=(auth_username, auth_password), verify=True, **kwargs)
+            elif cert and key:
                 with temp_cert_files(cert, key) as (cert_path, key_path):
                     return getattr(requests, method)(url, cert=(cert_path, key_path), verify=True, **kwargs)
             else:
-                return getattr(requests, method)(url, auth=(auth_username, auth_password), verify=True, **kwargs)
+                raise ValueError("No valid credentials available for API request")
         
         # Get domain information
         domain_response = make_request(
@@ -598,9 +596,8 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
         secret_data = credentials_secret.data or {}
         custom_cert, custom_key, auth_username, auth_password = extract_credentials_from_secret(secret_data, logger)
         
-        # Determine authentication method - cert takes precedence
-        use_cert_auth = custom_cert and custom_key
-        has_valid_auth = use_cert_auth or (auth_username and auth_password)
+        # Determine authentication method - username/password takes precedence
+        has_valid_auth = (auth_username and auth_password) or (custom_cert and custom_key)
         
         # Generate domain name
         domain = f"konflux-{namespace}"
