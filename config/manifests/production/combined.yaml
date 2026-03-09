@@ -173,7 +173,7 @@ spec:
          runAsNonRoot: true
       containers:
         - name: operator
-          image: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:v1.0.9
+          image: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:v1.1.1
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
