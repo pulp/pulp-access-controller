@@ -18,4 +18,8 @@ rules:
   - apiGroups: ["appstudio.redhat.com"]
     resources: ["imagerepositories"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusterversions"]
+    resourceNames: ["version"]
+    verbs: ["get"]
 

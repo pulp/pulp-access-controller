@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY main.py .
+COPY main.py domain_naming.py .
 
 # Ensure all files have correct permissions and ownership
 RUN chown -R 1001:1001 /app && \

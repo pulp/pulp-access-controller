@@ -30,7 +30,7 @@ The codebase has two source files:
 
 ### Key flow in main.py
 
-1. **Create handler**: Validates credentials secret → extracts cert/key or username/password → creates Pulp domain via API → builds and creates `pulp-access` K8s secret → optionally creates ImageRepository CR and configures Quay OCI backend
+1. **Create handler**: Resolves domain name (once, persisted in status) → optionally creates TBR service account via authorizer API → creates Pulp domain → builds `pulp-access` secret → optionally configures Quay
 2. **Update handler**: Re-reads credentials → updates or recreates the `pulp-access` secret
 3. **Delete handler**: Cleans up `pulp-access` secret and ImageRepository if created
 
@@ -45,7 +45,7 @@ The operator supports certificate-based (mTLS) and Basic Auth. Certificate auth 
 
 - `PULP_API_BASE_URL` = `https://mtls.internal.console.redhat.com`
 - `PULP_ACCESS_SECRET_NAME` = `pulp-access` (the output secret name)
-- Domain naming convention: `konflux-<namespace>`
+- Domain naming convention: `konflux-<namespace>[-<cluster-suffix>]`; suffix from `ClusterVersion.spec.clusterID` (or `KONFLUX_CLUSTER_ID` env); assigned once in `status.domain`, never renamed
 
 ## Kubernetes Resources
 

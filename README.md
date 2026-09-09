@@ -76,7 +76,28 @@ stringData:
 
 ### Step 2: Create a PulpAccessRequest
 
-Then, create a `PulpAccessRequest` that references your credentials secret:
+Then, create a `PulpAccessRequest` in your namespace.
+
+#### Konflux (recommended): controller-managed TBR credentials
+
+On Konflux clusters the operator provisions TBR service accounts automatically.
+You do **not** need to create a credentials secret:
+
+```yaml
+apiVersion: pulp.konflux-ci.dev/v1alpha1
+kind: PulpAccessRequest
+metadata:
+  name: my-pulp-access
+  namespace: my-namespace
+spec: {}
+```
+
+The operator reads `SA_CERT` and `SA_KEY` from the operator `pulp-secrets` Vault entry
+(`stonesoup/{staging|production}/pulp/pulp-access-controller`) to call the
+container-registry-authorizer API, creates a per-tenant service account, creates
+the Pulp domain, and writes the `pulp-access` secret with username/password.
+
+#### Legacy: bring your own credentials
 
 ```yaml
 apiVersion: pulp.konflux-ci.dev/v1alpha1
@@ -85,11 +106,13 @@ metadata:
   name: my-pulp-access
   namespace: my-namespace
 spec:
-  # Required: Name of the secret containing credentials
+  create_service_account: false
   credentialsSecretName: pulp-credentials
 ```
 
-**Note**: The Pulp domain will be automatically created with the name `konflux-<namespace>`. For example, if your namespace is `my-namespace`, the domain will be `konflux-my-namespace`.
+**Note**: The Pulp domain is assigned once when the `PulpAccessRequest` is first processed and stored in `status.domain`. It is never renamed by the controller.
+
+On OpenShift clusters the domain name is `konflux-<namespace>-<suffix>`, where `<suffix>` is a short hash of `ClusterVersion.spec.clusterID`. Example: `konflux-my-namespace-a3f9c2`. If no cluster ID is available (local dev), the legacy name `konflux-<namespace>` is used instead. Existing requests keep their original domain name.
 
 ### Advanced: Pulp with Quay Backend
 
