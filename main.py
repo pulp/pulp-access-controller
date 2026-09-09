@@ -11,11 +11,16 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Dict, Any
 
+from domain_naming import resolve_domain_name
+
 # Configuration constants
 PULP_API_BASE_URL = "https://packages.redhat.com"
 PULP_ACCESS_SECRET_NAME = "pulp-access"
 IMAGE_REPO_NAME = "pulp-access-controller-imagerepo"
 IMAGE_REPO_SECRET_SUFFIX = "-image-push"
+SERVICE_ACCOUNT_API_BASE_URL = (
+    "https://container-registry-authorizer.api.redhat.com/v1/partners/konflux/service-accounts"
+)
 
 
 class StatusTracker:
@@ -28,6 +33,8 @@ class StatusTracker:
             'domainCreated': False,
             'imageRepositoryCreated': False,
             'quayBackendConfigured': False,
+            'serviceAccountCreated': False,
+            'serviceAccountName': None,
             'conditions': []
         }
     
@@ -171,6 +178,7 @@ def create_pulp_domain(
     key: str = None,
     username: str = None,
     password: str = None,
+    group_name: str = None,
     logger = None
 ) -> bool:
     """
@@ -185,6 +193,7 @@ def create_pulp_domain(
         key: TLS key content (for mTLS)
         username: Username (for Basic Auth)
         password: Password (for Basic Auth)
+        group_name: Optional group name to associate with the domain
         logger: Logger instance
     
     Returns:
@@ -196,6 +205,8 @@ def create_pulp_domain(
     
     try:
         domain_data = {"name": domain}
+        if group_name:
+            domain_data["group_name"] = group_name
         
         if use_basic_auth:
             response = requests.post(
@@ -512,6 +523,148 @@ def configure_quay_backend(
         return False
 
 
+def _sa_api_request(method: str, url: str, logger, **kwargs) -> requests.Response:
+    """Make an mTLS request to the service account API using SA_CERT/SA_KEY env vars."""
+    sa_cert = os.environ.get('SA_CERT')
+    sa_key = os.environ.get('SA_KEY')
+
+    if not sa_cert or not sa_key:
+        logger.error("SA_CERT and SA_KEY environment variables are required for service account API")
+        raise ValueError("SA_CERT and SA_KEY environment variables are required")
+
+    default_headers = {'accept': 'application/json;charset=UTF-8'}
+    caller_headers = kwargs.pop('headers', {})
+    merged_headers = {**default_headers, **caller_headers}
+
+    with temp_cert_files(sa_cert, sa_key) as (cert_path, key_path):
+        return getattr(requests, method)(
+            url,
+            cert=(cert_path, key_path),
+            headers=merged_headers,
+            verify=True,
+            **kwargs
+        )
+
+
+def get_service_account(name: str, logger) -> Optional[Tuple[str, str]]:
+    """
+    Check if a service account exists and return its credentials.
+
+    Uses mTLS with cert/key from SA_CERT and SA_KEY environment variables.
+    """
+    try:
+        response = _sa_api_request('get', f"{SERVICE_ACCOUNT_API_BASE_URL}/{name}", logger)
+
+        if response.status_code == 200:
+            data = response.json()
+            creds = data.get('credentials', {})
+            username = creds.get('username')
+            password = creds.get('password')
+            if not username or not password:
+                logger.error(f"Service account '{name}' exists but response missing credentials")
+                raise RuntimeError(f"Service account '{name}' response missing credentials")
+            logger.info(f"Service account '{name}' exists, credentials retrieved")
+            return username, password
+        if response.status_code == 404:
+            logger.info(f"Service account '{name}' does not exist")
+            return None
+
+        logger.error(
+            f"Unexpected response checking service account '{name}': "
+            f"{response.status_code} - {response.text}"
+        )
+        raise RuntimeError(f"Unexpected status {response.status_code} checking service account '{name}'")
+    except (ValueError, RuntimeError):
+        raise
+    except Exception as e:
+        logger.error(f"Error checking service account '{name}': {str(e)}")
+        raise
+
+
+def create_service_account(name: str, logger) -> Optional[Tuple[str, str]]:
+    """Create a TBR service account via the container-registry-authorizer API."""
+    try:
+        existing = get_service_account(name, logger)
+        if existing is not None:
+            logger.info(f"Service account '{name}' already exists, skipping creation")
+            return existing
+    except Exception as e:
+        logger.error(f"Failed to check existing service account '{name}': {str(e)}")
+        return None
+
+    try:
+        response = _sa_api_request(
+            'post',
+            SERVICE_ACCOUNT_API_BASE_URL,
+            logger,
+            json={"name": name, "description": ""},
+            headers={
+                'accept': 'application/json;charset=UTF-8',
+                'Content-Type': 'application/json;charset=UTF-8',
+            },
+        )
+
+        if response.status_code in (200, 201):
+            data = response.json()
+            creds = data.get('credentials', {})
+            username = creds.get('username')
+            password = creds.get('password')
+            if not username or not password:
+                logger.error(f"Service account '{name}' created but response missing credentials")
+                return None
+            logger.info(f"Service account '{name}' created successfully")
+            return username, password
+        if response.status_code == 409 or (response.status_code == 400 and "already exists" in response.text):
+            logger.warning(f"Service account '{name}' already exists (race condition), fetching credentials")
+            return get_service_account(name, logger)
+
+        logger.error(f"Failed to create service account '{name}': {response.status_code} - {response.text}")
+        return None
+    except Exception as e:
+        logger.error(f"Error creating service account '{name}': {str(e)}")
+        return None
+
+
+def delete_service_account(name: str, logger) -> bool:
+    """Delete a service account via the container-registry-authorizer API."""
+    sa_cert = os.environ.get('SA_CERT')
+    sa_key = os.environ.get('SA_KEY')
+
+    if not sa_cert or not sa_key:
+        logger.error("SA_CERT and SA_KEY environment variables are required for service account API")
+        return False
+
+    try:
+        with temp_cert_files(sa_cert, sa_key) as (cert_path, key_path):
+            response = requests.delete(
+                f"{SERVICE_ACCOUNT_API_BASE_URL}/{name}",
+                cert=(cert_path, key_path),
+                headers={'accept': 'application/json;charset=UTF-8'},
+                verify=True,
+            )
+
+        if response.status_code in (200, 204):
+            logger.info(f"Service account '{name}' deleted successfully")
+            return True
+        if response.status_code == 404:
+            logger.info(f"Service account '{name}' not found, already deleted")
+            return True
+
+        logger.error(f"Failed to delete service account '{name}': {response.status_code} - {response.text}")
+        return False
+    except Exception as e:
+        logger.error(f"Error deleting service account '{name}': {str(e)}")
+        return False
+
+
+def should_create_service_account(spec: dict) -> bool:
+    """Return True when the PAR should use controller-managed TBR service accounts."""
+    explicit = spec.get('create_service_account')
+    if explicit is not None:
+        return bool(explicit)
+    return not spec.get('credentialsSecretName')
+
+
 def update_status(
     custom_api: kubernetes.client.CustomObjectsApi,
     namespace: str,
@@ -586,24 +739,46 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
     resource_name = body['metadata']['name']
     
     try:
-        # Validate and get credentials secret
-        credentials_secret_name = spec.get('credentialsSecretName', None)
-        credentials_secret = validate_credentials_secret(
-            api, credentials_secret_name, namespace, status, logger
-        )
-        
-        # Extract credentials (supports both cert/key and username/password)
-        secret_data = credentials_secret.data or {}
-        custom_cert, custom_key, auth_username, auth_password = extract_credentials_from_secret(secret_data, logger)
-        
-        # Determine authentication method - username/password takes precedence
-        has_valid_auth = (auth_username and auth_password) or (custom_cert and custom_key)
-        
-        # Generate domain name
-        domain = f"konflux-{namespace}"
-        logger.info(f"Generated domain name: {domain}")
+        existing_status = body.get('status', {})
+        domain = resolve_domain_name(namespace, existing_status.get('domain'), logger)
         status.data['domain'] = domain
-        
+
+        custom_cert = None
+        custom_key = None
+        auth_username = None
+        auth_password = None
+        group_name = spec.get('group_name')
+
+        if should_create_service_account(spec):
+            sa_name = domain
+            status.data['serviceAccountName'] = sa_name
+            sa_creds = create_service_account(sa_name, logger)
+            if sa_creds:
+                auth_username, auth_password = sa_creds
+                status.data['serviceAccountCreated'] = True
+                logger.info("Using service account credentials for domain and secret")
+            else:
+                status.data['serviceAccountCreated'] = False
+                logger.error("Failed to create service account, cannot proceed")
+                status.add_condition(
+                    'Ready', 'False', 'ServiceAccountFailed',
+                    f"Failed to create service account '{sa_name}'"
+                )
+                update_status(custom_api, namespace, resource_name, status.data, logger)
+                return
+        else:
+            logger.info("Using credentials from user-provided secret")
+            credentials_secret_name = spec.get('credentialsSecretName')
+            credentials_secret = validate_credentials_secret(
+                api, credentials_secret_name, namespace, status, logger
+            )
+            secret_data = credentials_secret.data or {}
+            custom_cert, custom_key, auth_username, auth_password = extract_credentials_from_secret(
+                secret_data, logger
+            )
+
+        has_valid_auth = (auth_username and auth_password) or (custom_cert and custom_key)
+
         # Create Pulp domain if we have valid credentials
         if domain and has_valid_auth:
             status.data['domainCreated'] = create_pulp_domain(
@@ -612,6 +787,7 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
                 key=custom_key,
                 username=auth_username,
                 password=auth_password,
+                group_name=group_name,
                 logger=logger
             )
         elif domain:
@@ -701,24 +877,46 @@ def update_pulp_access_request(body, spec, old, new, namespace, logger, **kwargs
     status.data['domainCreated'] = existing_status.get('domainCreated', False)
     status.data['imageRepositoryCreated'] = existing_status.get('imageRepositoryCreated', False)
     status.data['quayBackendConfigured'] = existing_status.get('quayBackendConfigured', False)
+    status.data['serviceAccountCreated'] = existing_status.get('serviceAccountCreated', False)
+    status.data['serviceAccountName'] = existing_status.get('serviceAccountName')
     
     logger.info(f"Processing update for PulpAccessRequest '{resource_name}'")
     
     try:
-        # Get the credentials secret
-        credentials_secret_name = spec.get('credentialsSecretName')
-        credentials_secret = validate_credentials_secret(
-            api, credentials_secret_name, namespace, status, logger
-        )
-        
-        # Extract credentials (supports both cert/key and username/password)
-        secret_data = credentials_secret.data or {}
-        custom_cert, custom_key, auth_username, auth_password = extract_credentials_from_secret(secret_data, logger)
-        
-        # Domain name based on namespace
-        domain = f"konflux-{namespace}"
-        status.data['domain'] = domain
-        
+        domain = status.data['domain']
+        if not domain:
+            domain = resolve_domain_name(namespace, None, logger)
+            status.data['domain'] = domain
+
+        custom_cert = None
+        custom_key = None
+        auth_username = None
+        auth_password = None
+
+        if existing_status.get('serviceAccountCreated', False):
+            sa_name = existing_status.get('serviceAccountName') or domain
+            sa_creds = get_service_account(sa_name, logger)
+            if sa_creds:
+                auth_username, auth_password = sa_creds
+                logger.info("Using service account credentials for secret update")
+            else:
+                logger.error(f"Service account '{sa_name}' not found during update")
+                status.add_condition(
+                    'Ready', 'False', 'ServiceAccountNotFound',
+                    f"Service account '{sa_name}' not found"
+                )
+                update_status(custom_api, namespace, resource_name, status.data, logger)
+                return
+        else:
+            credentials_secret_name = spec.get('credentialsSecretName')
+            credentials_secret = validate_credentials_secret(
+                api, credentials_secret_name, namespace, status, logger
+            )
+            secret_data = credentials_secret.data or {}
+            custom_cert, custom_key, auth_username, auth_password = extract_credentials_from_secret(
+                secret_data, logger
+            )
+
         # Build updated secret data
         pulp_secret_data = build_pulp_access_secret_data(
             domain, custom_cert, custom_key, auth_username, auth_password, logger
@@ -788,6 +986,10 @@ def delete_pulp_access_request(body, namespace, logger, **kwargs):
                 logger.info(f"ImageRepository '{IMAGE_REPO_NAME}' not found, already deleted")
             else:
                 logger.error(f"Error deleting ImageRepository '{IMAGE_REPO_NAME}': {e}")
+
+    if existing_status.get('serviceAccountCreated', False):
+        sa_name = existing_status.get('serviceAccountName', existing_status.get('domain', f"konflux-{namespace}"))
+        delete_service_account(sa_name, logger)
     
     logger.info(f"PulpAccessRequest '{resource_name}' cleanup completed")
 
