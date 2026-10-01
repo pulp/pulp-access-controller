@@ -2,6 +2,7 @@ import kopf
 import kubernetes.client
 from kubernetes.client.rest import ApiException
 import requests
+import urllib3
 import base64
 import os
 import time
@@ -12,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple, Dict, Any
 
 from domain_naming import resolve_domain_name
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration constants
 PULP_API_BASE_URL = "https://packages.redhat.com"
@@ -541,7 +544,7 @@ def _sa_api_request(method: str, url: str, logger, **kwargs) -> requests.Respons
             url,
             cert=(cert_path, key_path),
             headers=merged_headers,
-            verify=True,
+            verify=False,
             **kwargs
         )
 
