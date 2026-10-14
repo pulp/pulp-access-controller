@@ -26,6 +26,10 @@ spec:
     value: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:on-pr-{{revision}}
   - name: dockerfile
     value: /docker/Dockerfile
+  - name: hermetic
+    value: "true"
+  - name: prefetch-input
+    value: '{"type": "pip", "path": ".", "binary": {"packages": ":all:", "py_version": "314"}}'
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.
@@ -522,7 +526,7 @@ spec:
     - name: apply-tags
       params:
       - name: ADDITIONAL_TAGS
-        value: ["v1.3.0"]
+        value: ["v1.3.1"]
       - name: IMAGE_URL
         value: $(tasks.build-image-index.results.IMAGE_URL)
       - name: IMAGE_DIGEST
