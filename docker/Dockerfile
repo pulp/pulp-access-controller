@@ -8,7 +8,10 @@ WORKDIR /app
 
 # Copy requirements and install dependencies as root first
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# /cachi2/cachi2.env is only present during hermetic Konflux builds; it points
+# pip at the prefetched wheels instead of the network.
+RUN if [ -f /cachi2/cachi2.env ]; then . /cachi2/cachi2.env; fi && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY main.py domain_naming.py .
