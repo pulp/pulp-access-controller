@@ -530,9 +530,9 @@ jsonpointer==3.2.1 \
     --hash=sha256:47c846513b3a4ec46eecef1105207fba075e2a3659048e362bd7daff0fc33342 \
     --hash=sha256:b19ee68644e9ffb51440448d8f7811af2b7406eea1db90603e93f5849323119a
     # via jsonpatch
-kopf==1.45.0 \
-    --hash=sha256:adc406a1ed253c502469500f0e9cffccd51cb4f1db823617779891d58759936b \
-    --hash=sha256:b5ce87c1d558316ef81ec7fb0fcc6a5b8ea7fe82eb3240f5df8ff395a1fbbfa7
+kopf==1.45.2 \
+    --hash=sha256:14582509dfdf6d9b01996914d1c1727bec58740b3ce224d559aa2c0d9255780b \
+    --hash=sha256:5baa180cfdebe1c5095d2a0a96d7d91825b6920541a0825c55719c36abb0054f
     # via -r requirements.txt
 kubernetes==37.0.1 \
     --hash=sha256:a313a482361506340b5972cabaf20a7ee16ec8713e73325bf699b783a40464a9 \
