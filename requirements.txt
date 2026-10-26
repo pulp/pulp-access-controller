@@ -190,9 +190,9 @@ attrs==26.1.0 \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
     --hash=sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32
     # via aiohttp
-certifi==2026.7.22 \
-    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
-    --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
+certifi==2026.10.19 \
+    --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
+    --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
     # via
     #   kubernetes
     #   requests
@@ -533,11 +533,11 @@ jsonpointer==3.2.1 \
 kopf==1.45.0 \
     --hash=sha256:adc406a1ed253c502469500f0e9cffccd51cb4f1db823617779891d58759936b \
     --hash=sha256:b5ce87c1d558316ef81ec7fb0fcc6a5b8ea7fe82eb3240f5df8ff395a1fbbfa7
-    # via -r requirements.txt
+    # via -r requirements.in
 kubernetes==37.0.1 \
     --hash=sha256:a313a482361506340b5972cabaf20a7ee16ec8713e73325bf699b783a40464a9 \
     --hash=sha256:e41db0a95615c2388680a2d556df33fd0f27a5717c9b5df5857e475c196c2f10
-    # via -r requirements.txt
+    # via -r requirements.in
 multidict==7.1.0 \
     --hash=sha256:0179698c3c913eb64f32397083747fad20ed0f0a2b7469a08cd1a8a95d14d90e \
     --hash=sha256:034b0dc1b7fb8279599c5d8563f86abb4d2454735b06544ecab23c54572ad2bd \
@@ -1091,7 +1091,7 @@ requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed
     # via
-    #   -r requirements.txt
+    #   -r requirements.in
     #   kubernetes
     #   requests-oauthlib
 requests-oauthlib==2.0.0 \
