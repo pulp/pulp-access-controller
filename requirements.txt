@@ -522,9 +522,9 @@ iso8601==2.1.0 \
     --hash=sha256:6b1d3829ee8921c4301998c909f7829fa9ed3cbdac0d3b16af2d743aed1ba8df \
     --hash=sha256:aac4145c4dcb66ad8b648a02830f5e2ff6c24af20f4f482689be402db2429242
     # via kopf
-jsonpatch==1.35 \
-    --hash=sha256:417e05303ebf7aef98d3ebf1e1ae7e7a4de6ec57bc5d243cd3509eff650e959f \
-    --hash=sha256:679ad08672b4663c7ef1e5f3331d940f5e7786661b9acc1530104be1638e7a4f
+jsonpatch==1.41 \
+    --hash=sha256:1aca06402f94e5cd7bc133af0cb4f7b2c2f9c0bc172f9de52c9aa4c6104b0d1c \
+    --hash=sha256:fd493e82a57da7dd60e22ff2521f75d2be3ce41d76a845799d898de6da682922
     # via kopf
 jsonpointer==3.2.1 \
     --hash=sha256:47c846513b3a4ec46eecef1105207fba075e2a3659048e362bd7daff0fc33342 \
