@@ -526,9 +526,9 @@ jsonpatch==1.35 \
     --hash=sha256:417e05303ebf7aef98d3ebf1e1ae7e7a4de6ec57bc5d243cd3509eff650e959f \
     --hash=sha256:679ad08672b4663c7ef1e5f3331d940f5e7786661b9acc1530104be1638e7a4f
     # via kopf
-jsonpointer==3.2.1 \
-    --hash=sha256:47c846513b3a4ec46eecef1105207fba075e2a3659048e362bd7daff0fc33342 \
-    --hash=sha256:b19ee68644e9ffb51440448d8f7811af2b7406eea1db90603e93f5849323119a
+jsonpointer==3.11 \
+    --hash=sha256:84f354cf558ca55f245e83df6c503335fc76304d77fc1daee12ffe746d8260f0 \
+    --hash=sha256:dac052acf401e2079cd3f4495b334cdaf073d74706992a7b2b6987c9ae2cf73f
     # via jsonpatch
 kopf==1.45.0 \
     --hash=sha256:adc406a1ed253c502469500f0e9cffccd51cb4f1db823617779891d58759936b \
