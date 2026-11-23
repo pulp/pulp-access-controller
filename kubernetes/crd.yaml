@@ -80,4 +80,11 @@ spec:
                 serviceAccountName:
                   type: string
                   description: "The TBR service account name (matches the Pulp domain name)"
+                tokenRegenerationRequest:
+                  type: string
+                  description: "Last handled value of the pulp.konflux-ci.dev/regenerate-token annotation"
+                tokenRegeneratedAt:
+                  type: string
+                  format: date-time
+                  description: "When the service account token was last regenerated"
 
