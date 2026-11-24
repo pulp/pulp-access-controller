@@ -526,7 +526,7 @@ spec:
     - name: apply-tags
       params:
       - name: ADDITIONAL_TAGS
-        value: ["v1.3.1"]
+        value: ["v1.4.0"]
       - name: IMAGE_URL
         value: $(tasks.build-image-index.results.IMAGE_URL)
       - name: IMAGE_DIGEST
