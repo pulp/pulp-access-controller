@@ -24,6 +24,9 @@ IMAGE_REPO_SECRET_SUFFIX = "-image-push"
 SERVICE_ACCOUNT_API_BASE_URL = (
     "https://container-registry-authorizer.api.redhat.com/v1/partners/konflux/service-accounts"
 )
+# Set this annotation on a PulpAccessRequest to a new value (e.g. a timestamp) to
+# regenerate the managed service account token and refresh the pulp-access secret.
+REGENERATE_TOKEN_ANNOTATION = "pulp.konflux-ci.dev/regenerate-token"
 
 
 class StatusTracker:
@@ -38,6 +41,8 @@ class StatusTracker:
             'quayBackendConfigured': False,
             'serviceAccountCreated': False,
             'serviceAccountName': None,
+            'tokenRegenerationRequest': None,
+            'tokenRegeneratedAt': None,
             'conditions': []
         }
     
@@ -628,6 +633,47 @@ def create_service_account(name: str, logger) -> Optional[Tuple[str, str]]:
         return None
 
 
+def regenerate_service_account_token(name: str, logger) -> Optional[Tuple[str, str]]:
+    """Regenerate the token of an existing service account and return the new credentials."""
+    try:
+        # updateServiceAccount_1: POST /v1/partners/{partnerCode}/service-accounts/{name}
+        # Only regenerateToken is sent so the description and recover state are left alone.
+        response = _sa_api_request(
+            'post',
+            f"{SERVICE_ACCOUNT_API_BASE_URL}/{name}",
+            logger,
+            json={"regenerateToken": True},
+            headers={'Content-Type': 'application/json;charset=UTF-8'},
+        )
+    except Exception as e:
+        logger.error(f"Error regenerating token for service account '{name}': {str(e)}")
+        return None
+
+    if response.status_code not in (200, 201):
+        logger.error(
+            f"Failed to regenerate token for service account '{name}': "
+            f"{response.status_code} - {response.text}"
+        )
+        return None
+
+    try:
+        creds = response.json().get('credentials', {})
+    except ValueError:
+        creds = {}
+    username = creds.get('username')
+    password = creds.get('password')
+    if username and password:
+        logger.info(f"Token regenerated for service account '{name}'")
+        return username, password
+
+    logger.info(f"Token regenerated for service account '{name}', fetching new credentials")
+    try:
+        return get_service_account(name, logger)
+    except Exception as e:
+        logger.error(f"Failed to fetch credentials after regenerating token for '{name}': {str(e)}")
+        return None
+
+
 def delete_service_account(name: str, logger) -> bool:
     """Delete a service account via the container-registry-authorizer API."""
     sa_cert = os.environ.get('SA_CERT')
@@ -755,6 +801,10 @@ def create_secret(body, spec, namespace, logger, patch, **kwargs):
         if should_create_service_account(spec):
             sa_name = domain
             status.data['serviceAccountName'] = sa_name
+            # Fresh credentials are issued on creation; treat any existing request as handled.
+            status.data['tokenRegenerationRequest'] = (
+                body.get('metadata', {}).get('annotations', {}).get(REGENERATE_TOKEN_ANNOTATION)
+            )
             sa_creds = create_service_account(sa_name, logger)
             if sa_creds:
                 auth_username, auth_password = sa_creds
@@ -882,6 +932,8 @@ def update_pulp_access_request(body, spec, old, new, namespace, logger, **kwargs
     status.data['quayBackendConfigured'] = existing_status.get('quayBackendConfigured', False)
     status.data['serviceAccountCreated'] = existing_status.get('serviceAccountCreated', False)
     status.data['serviceAccountName'] = existing_status.get('serviceAccountName')
+    status.data['tokenRegenerationRequest'] = existing_status.get('tokenRegenerationRequest')
+    status.data['tokenRegeneratedAt'] = existing_status.get('tokenRegeneratedAt')
     
     logger.info(f"Processing update for PulpAccessRequest '{resource_name}'")
     
@@ -895,10 +947,25 @@ def update_pulp_access_request(body, spec, old, new, namespace, logger, **kwargs
         custom_key = None
         auth_username = None
         auth_password = None
+        handled_regen_request = None
 
         if existing_status.get('serviceAccountCreated', False):
             sa_name = existing_status.get('serviceAccountName') or domain
-            sa_creds = get_service_account(sa_name, logger)
+            regen_request = body.get('metadata', {}).get('annotations', {}).get(REGENERATE_TOKEN_ANNOTATION)
+            if regen_request and regen_request != existing_status.get('tokenRegenerationRequest'):
+                logger.info(f"Token regeneration requested ('{regen_request}') for service account '{sa_name}'")
+                sa_creds = regenerate_service_account_token(sa_name, logger)
+                if not sa_creds:
+                    status.add_condition(
+                        'Ready', 'False', 'TokenRegenerationFailed',
+                        f"Failed to regenerate token for service account '{sa_name}'"
+                    )
+                    raise kopf.TemporaryError(
+                        f"Token regeneration for '{sa_name}' failed, retrying", delay=60
+                    )
+                handled_regen_request = regen_request
+            else:
+                sa_creds = get_service_account(sa_name, logger)
             if sa_creds:
                 auth_username, auth_password = sa_creds
                 logger.info("Using service account credentials for secret update")
@@ -939,6 +1006,10 @@ def update_pulp_access_request(body, spec, old, new, namespace, logger, **kwargs
             else:
                 raise
         
+        if handled_regen_request:
+            status.data['tokenRegenerationRequest'] = handled_regen_request
+            status.data['tokenRegeneratedAt'] = datetime.now(timezone.utc).isoformat()
+
         status.add_condition('Ready', 'True', 'Updated', f"Secret '{PULP_ACCESS_SECRET_NAME}' updated successfully")
         update_status(custom_api, namespace, resource_name, status.data, logger)
         logger.info("PulpAccessRequest update completed successfully")

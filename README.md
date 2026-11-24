@@ -97,6 +97,18 @@ The operator reads `SA_CERT` and `SA_KEY` from the operator `pulp-secrets` Vault
 container-registry-authorizer API, creates a per-tenant service account, creates
 the Pulp domain, and writes the `pulp-access` secret with username/password.
 
+To regenerate the service account token (e.g. if it leaked), set the
+`pulp.konflux-ci.dev/regenerate-token` annotation to a new value. The operator
+regenerates the token and rewrites the `pulp-access` secret:
+
+```bash
+kubectl annotate par my-pulp-access -n my-namespace --overwrite \
+  pulp.konflux-ci.dev/regenerate-token="$(date +%s)"
+```
+
+The last handled value is recorded in `status.tokenRegenerationRequest`, and the time
+in `status.tokenRegeneratedAt`. Re-applying the same value does nothing.
+
 #### Legacy: bring your own credentials
 
 ```yaml

@@ -87,6 +87,13 @@ spec:
                 serviceAccountName:
                   type: string
                   description: "The TBR service account name (matches the Pulp domain name)"
+                tokenRegenerationRequest:
+                  type: string
+                  description: "Last handled value of the pulp.konflux-ci.dev/regenerate-token annotation"
+                tokenRegeneratedAt:
+                  type: string
+                  format: date-time
+                  description: "When the service account token was last regenerated"
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -187,7 +194,7 @@ spec:
          runAsNonRoot: true
       containers:
         - name: operator
-          image: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:v1.3.1
+          image: quay.io/redhat-user-workloads/pulp-access-controller-tenant/pulp-access-controller-ca9ff:v1.4.0
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
